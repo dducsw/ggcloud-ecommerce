@@ -1,0 +1,10 @@
+credentials/*
+.env
+.venv/*
+.vscode/*
+data/*.csv
+dwh/*.csv
+__pycache__
+__pycache__/*
+*.pyc
+note

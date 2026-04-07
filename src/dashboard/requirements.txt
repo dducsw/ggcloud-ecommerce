@@ -1,0 +1,14 @@
+pandas
+numpy
+pyarrow
+google-cloud-bigquery
+google-cloud-storage
+flask
+gunicorn
+kagglehub
+gcsfs
+python-dotenv
+pandas-gbq
+streamlit
+plotly
+google-cloud-bigquery-storage
