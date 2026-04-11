@@ -1,0 +1,24 @@
+{
+  "name": "thelook-postgres-source",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "postgres-source",
+    "database.port": "5432",
+    "database.user": "db_user",
+    "database.password": "db_password",
+    "database.dbname": "thelook_db",
+    "database.server.name": "thelook",
+    "plugin.name": "pgoutput",
+    "slot.name": "thelook_debezium_slot",
+    "publication.autocreate.mode": "filtered",
+    "snapshot.mode": "initial",
+    "topic.prefix": "thelook",
+    "schema.include.list": "demo",
+    "table.include.list": "demo.users,demo.products,demo.distribution_centers,demo.inventory_items,demo.orders,demo.order_items,demo.events",
+    "tombstones.on.delete": "false",
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "connect",
+    "include.schema.changes": "false"
+  }
+}

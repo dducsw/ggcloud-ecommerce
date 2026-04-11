@@ -1,0 +1,17 @@
+name: thelook_dwh
+version: 1.0.0
+config-version: 2
+
+profile: thelook_dwh
+
+model-paths: ["models"]
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  thelook_dwh:
+    staging:
+      +materialized: view
+      +schema: "{{ env_var('BRONZE_DATASET_ID', 'thelook_bronze') }}"
+    marts:
+      +materialized: table
+      +schema: "{{ env_var('GOLD_DATASET_ID', 'thelook_gold') }}"

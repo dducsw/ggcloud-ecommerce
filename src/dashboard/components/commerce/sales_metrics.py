@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 import plotly.express as px
 from utils.data_provider import data_provider
 
@@ -15,22 +14,15 @@ def display_kpi_metrics():
 def display_sales_trend():
     """Renders the monthly sales trend line chart."""
     st.subheader("📈 Monthly Sales Trend")
-    
-    if data_provider.use_local:
-        # Simple local aggregation if no BQ
-        df = data_provider.query("fact_orders")
-        df['month'] = pd.to_datetime(df['created_date_key'], format='%Y%m%d', errors='coerce').dt.strftime('%Y-%m')
-        trend_df = df.dropna(subset=['month']).groupby('month').agg({'total_revenue': 'sum'}).reset_index()
-    else:
-        query = f"""
-        SELECT 
-            FORMAT_DATE('%Y-%m', PARSE_DATE('%Y%m%d', CAST(created_date_key AS STRING))) as month,
-            SUM(total_revenue) as monthly_revenue
-        FROM `{data_provider.project_id}.{data_provider.dataset_id}.fact_orders`
-        GROUP BY 1 ORDER BY 1
-        """
-        trend_df = data_provider.query("fact_orders", query=query)
-    
-    fig = px.line(trend_df, x="month", y="total_revenue" if data_provider.use_local else "monthly_revenue", 
+    query = f"""
+    SELECT 
+        FORMAT_DATE('%Y-%m', PARSE_DATE('%Y%m%d', CAST(created_date_key AS STRING))) as month,
+        SUM(total_revenue) as monthly_revenue
+    FROM `{data_provider.project_id}.{data_provider.dataset_id}.fact_orders`
+    GROUP BY 1 ORDER BY 1
+    """
+    trend_df = data_provider.query("fact_orders", query=query)
+
+    fig = px.line(trend_df, x="month", y="monthly_revenue", 
                   markers=True, title="Revenue Over Time")
     st.plotly_chart(fig, width='stretch')

@@ -1,0 +1,76 @@
+[0m23:02:25.554993 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x0000019CF2867A70>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x0000019CF306CF80>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x0000019CF57469F0>]}
+
+
+============================== 23:02:25.559513 | 949504f0-7966-4d87-ad33-db5b9f88f06a ==============================
+[0m23:02:25.559513 [info ] [MainThread]: Running with dbt=1.11.8
+[0m23:02:25.559513 [debug] [MainThread]: running dbt with arguments {'version_check': 'True', 'no_print': 'None', 'static_parser': 'True', 'target_path': 'None', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'printer_width': '80', 'write_json': 'True', 'introspect': 'True', 'log_cache_events': 'False', 'empty': 'False', 'cache_selected_only': 'False', 'log_format': 'default', 'debug': 'False', 'fail_fast': 'False', 'partial_parse': 'True', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'profiles_dir': '.', 'invocation_command': 'dbt compile --select stg_orders stg_order_items stg_events --profiles-dir .', 'use_colors': 'True', 'indirect_selection': 'eager', 'use_experimental_parser': 'False', 'log_path': 'D:\\BK_Document\\252\\BTL_DWH_CLOUD\\ggcloud-ecommerce\\ggcloud-ecommerce\\dbt\\thelook_dwh\\logs'}
+[0m23:02:25.562513 [error] [MainThread]: Encountered an error:
+Runtime Error
+  Could not find profile named 'thelook_dwh'
+[0m23:02:25.563512 [debug] [MainThread]: Command `dbt compile` failed at 23:02:25.563512 after 0.14 seconds
+[0m23:02:25.563512 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x0000019CF57E7B00>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x0000019CF2867A70>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x0000019CF5446540>]}
+[0m23:02:25.564514 [debug] [MainThread]: Flushing usage events
+[0m23:02:27.180166 [debug] [MainThread]: An error was encountered while trying to flush usage events
+[0m23:03:23.116783 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001ECD1771FA0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001ECD1822930>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001ECD18224E0>]}
+
+
+============================== 23:03:23.121520 | 8289d16c-99f2-4409-84d9-4a9739092c5e ==============================
+[0m23:03:23.121520 [info ] [MainThread]: Running with dbt=1.11.8
+[0m23:03:23.122574 [debug] [MainThread]: running dbt with arguments {'version_check': 'True', 'no_print': 'None', 'static_parser': 'True', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'target_path': 'None', 'printer_width': '80', 'write_json': 'True', 'empty': 'False', 'log_cache_events': 'False', 'introspect': 'True', 'cache_selected_only': 'False', 'fail_fast': 'False', 'debug': 'False', 'log_format': 'default', 'profiles_dir': '.', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'partial_parse': 'True', 'use_colors': 'True', 'invocation_command': 'dbt compile --select stg_orders stg_order_items stg_events --profiles-dir .', 'indirect_selection': 'eager', 'use_experimental_parser': 'False', 'log_path': 'D:\\BK_Document\\252\\BTL_DWH_CLOUD\\ggcloud-ecommerce\\ggcloud-ecommerce\\dbt\\thelook_dwh\\logs'}
+[0m23:03:23.129952 [error] [MainThread]: Encountered an error:
+Parsing Error
+  Env var required but not provided: 'GCP_PROJECT_ID'
+[0m23:03:23.131546 [debug] [MainThread]: Command `dbt compile` failed at 23:03:23.131546 after 0.17 seconds
+[0m23:03:23.132079 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001ECD20CE4B0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001ECD147F500>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001ECD321E510>]}
+[0m23:03:23.132611 [debug] [MainThread]: Flushing usage events
+[0m23:03:24.431477 [debug] [MainThread]: An error was encountered while trying to flush usage events
+[0m23:22:55.080049 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001CD60F53FE0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001CD60F2CAA0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001CD60E033E0>]}
+
+
+============================== 23:22:55.084558 | c7296973-659b-4061-ac53-ddc69ee866c0 ==============================
+[0m23:22:55.084558 [info ] [MainThread]: Running with dbt=1.11.8
+[0m23:22:55.085558 [debug] [MainThread]: running dbt with arguments {'version_check': 'True', 'no_print': 'None', 'static_parser': 'True', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'target_path': 'None', 'printer_width': '80', 'write_json': 'True', 'empty': 'False', 'log_cache_events': 'False', 'introspect': 'True', 'cache_selected_only': 'False', 'fail_fast': 'False', 'debug': 'False', 'log_format': 'default', 'partial_parse': 'True', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'profiles_dir': 'dbt/thelook_dwh', 'use_colors': 'True', 'invocation_command': 'dbt compile --project-dir dbt/thelook_dwh --profiles-dir dbt/thelook_dwh --select dim_products fact_order_items', 'indirect_selection': 'eager', 'use_experimental_parser': 'False', 'log_path': 'dbt\\thelook_dwh\\logs'}
+[0m23:22:55.091148 [error] [MainThread]: Encountered an error:
+Parsing Error
+  Env var required but not provided: 'GCP_PROJECT_ID'
+[0m23:22:55.092676 [debug] [MainThread]: Command `dbt compile` failed at 23:22:55.092676 after 0.14 seconds
+[0m23:22:55.093683 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001CD610FA0C0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001CD6095DD00>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001CD62625940>]}
+[0m23:22:55.093683 [debug] [MainThread]: Flushing usage events
+[0m23:22:56.726695 [debug] [MainThread]: An error was encountered while trying to flush usage events
+[0m23:23:35.419461 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A853F41310>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A858FF2510>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A858FF2E10>]}
+
+
+============================== 23:23:35.424974 | b2888af9-8718-4ec3-b342-7617552ad6c9 ==============================
+[0m23:23:35.424974 [info ] [MainThread]: Running with dbt=1.11.8
+[0m23:23:35.424974 [debug] [MainThread]: running dbt with arguments {'static_parser': 'True', 'no_print': 'None', 'version_check': 'True', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'target_path': 'None', 'printer_width': '80', 'write_json': 'True', 'empty': 'False', 'log_cache_events': 'False', 'introspect': 'True', 'cache_selected_only': 'False', 'log_format': 'default', 'debug': 'False', 'fail_fast': 'False', 'partial_parse': 'True', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'profiles_dir': 'dbt/thelook_dwh', 'use_colors': 'True', 'indirect_selection': 'eager', 'invocation_command': 'dbt compile --project-dir dbt/thelook_dwh --profiles-dir dbt/thelook_dwh --select dim_products fact_order_items', 'use_experimental_parser': 'False', 'log_path': 'dbt\\thelook_dwh\\logs'}
+[0m23:23:40.683890 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'project_id', 'label': 'b2888af9-8718-4ec3-b342-7617552ad6c9', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A8572B8620>]}
+[0m23:23:40.771041 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'adapter_info', 'label': 'b2888af9-8718-4ec3-b342-7617552ad6c9', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86C843380>]}
+[0m23:23:40.772040 [info ] [MainThread]: Registered adapter: bigquery=1.11.1
+[0m23:23:41.571796 [debug] [MainThread]: checksum: 7d524ac048c2100769df89d592e662e060a73ca564e31bd9c2a37efdfe8d8ab6, vars: {}, profile: , target: , version: 1.11.8
+[0m23:23:41.572797 [info ] [MainThread]: Unable to do partial parsing because saved manifest not found. Starting full parse.
+[0m23:23:41.572797 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'partial_parser', 'label': 'b2888af9-8718-4ec3-b342-7617552ad6c9', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86CCAB9E0>]}
+[0m23:23:44.203629 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'load_project', 'label': 'b2888af9-8718-4ec3-b342-7617552ad6c9', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86E51ABA0>]}
+[0m23:23:44.283031 [debug] [MainThread]: Wrote artifact WritableManifest to dbt\thelook_dwh\target\manifest.json
+[0m23:23:44.287635 [debug] [MainThread]: Wrote artifact SemanticManifest to dbt\thelook_dwh\target\semantic_manifest.json
+[0m23:23:44.324313 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'resource_counts', 'label': 'b2888af9-8718-4ec3-b342-7617552ad6c9', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86E57DC10>]}
+[0m23:23:44.325315 [info ] [MainThread]: Found 14 models, 7 sources, 539 macros
+[0m23:23:44.325315 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'runnable_timing', 'label': 'b2888af9-8718-4ec3-b342-7617552ad6c9', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86CDE0680>]}
+[0m23:23:44.327342 [info ] [MainThread]: 
+[0m23:23:44.328312 [info ] [MainThread]: Concurrency: 4 threads (target='dev')
+[0m23:23:44.328312 [info ] [MainThread]: 
+[0m23:23:44.328312 [debug] [MainThread]: Acquiring new bigquery connection 'master'
+[0m23:23:44.333827 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_local-sandbox_thelook_bronze_thelook_bronze'
+[0m23:23:44.333827 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m23:23:44.334828 [debug] [ThreadPool]: Acquiring new bigquery connection 'list_local-sandbox_thelook_bronze_thelook_gold'
+[0m23:23:44.335827 [debug] [ThreadPool]: Opening a new connection, currently in state init
+[0m23:23:44.335827 [debug] [ThreadPool]: BigQuery adapter: Got an error when attempting to create a bigquery " "client: '[Errno 2] No such file or directory: 'D:/BK_Document/252/BTL_DWH_CLOUD/ggcloud-ecommerce/ggcloud-ecommerce/dbt/thelook_dwh/fake-key.json''
+[0m23:23:44.336826 [debug] [ThreadPool]: BigQuery adapter: Got an error when attempting to create a bigquery " "client: '[Errno 2] No such file or directory: 'D:/BK_Document/252/BTL_DWH_CLOUD/ggcloud-ecommerce/ggcloud-ecommerce/dbt/thelook_dwh/fake-key.json''
+[0m23:23:44.337824 [debug] [MainThread]: Opening a new connection, currently in state init
+[0m23:23:44.337824 [debug] [MainThread]: BigQuery adapter: Got an error when attempting to create a bigquery " "client: '[Errno 2] No such file or directory: 'D:/BK_Document/252/BTL_DWH_CLOUD/ggcloud-ecommerce/ggcloud-ecommerce/dbt/thelook_dwh/fake-key.json''
+[0m23:23:44.338824 [error] [MainThread]: Encountered an error:
+Database Error
+  [Errno 2] No such file or directory: 'D:/BK_Document/252/BTL_DWH_CLOUD/ggcloud-ecommerce/ggcloud-ecommerce/dbt/thelook_dwh/fake-key.json'
+[0m23:23:44.339825 [debug] [MainThread]: Command `dbt compile` failed at 23:23:44.339825 after 9.05 seconds
+[0m23:23:44.339825 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A8577730B0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86E5E3080>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A86E57CAD0>]}
+[0m23:23:44.340825 [debug] [MainThread]: Flushing usage events
+[0m23:23:45.730846 [debug] [MainThread]: An error was encountered while trying to flush usage events

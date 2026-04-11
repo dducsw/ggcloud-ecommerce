@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: thelook_ecommerce
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: "{{ env_var('BRONZE_DATASET_ID', 'thelook_bronze') }}"
+    tables:
+      - name: users
+      - name: products
+      - name: distribution_centers
+      - name: inventory_items
+      - name: orders
+      - name: order_items
+      - name: events

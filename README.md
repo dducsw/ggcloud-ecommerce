@@ -1,115 +1,96 @@
-# TheLook eCommerce: End-to-End Data Warehouse & BI Suite
+# TheLook Smart Router Lakehouse (GCP)
 
-This project implements a professional, modular **Data Warehouse (DWH)** and **Business Intelligence (BI)** solution for the "TheLook" eCommerce dataset. It features a robust Python ETL pipeline, a Star Schema architecture, and a domain-driven Streamlit dashboard, optimized for both local development and **Google Cloud Run** deployment.
+This repo now follows one pipeline only:
 
----
+1. Source: PostgreSQL + datagen
+2. CDC: Debezium -> Kafka (local), then Kafka -> Pub/Sub bridge
+3. Router: Apache Beam/Dataflow routes by source table
+4. Hot path: events/orders -> BigQuery bronze (streaming inserts)
+5. Cold path: users/products/dist_centers -> Parquet on GCS
+6. Transform: dbt models from bronze to gold
+7. Serve: Streamlit dashboard on BigQuery
 
-## 🏗️ Architecture & Data Model
+## Active Entrypoints
 
-### Data Warehouse (Star Schema)
-The project organizes data into a clean Star Schema for optimized analytical performance:
-- **Fact Tables**: `fact_orders`, `fact_order_items`, `fact_events`, `fact_inventory`.
-- **Dimension Tables**: `dim_users`, `dim_products`, `dim_distribution_centers`, `dim_date`.
+- Compose: docker-compose.yaml
+- Debezium connector registration: src/cdc/register_debezium_connector.py
+- Step 1 local helper (Windows): infra/cdc/run_step1_local.ps1
+- Pub/Sub setup: src/streaming/setup_pubsub.py
+- Kafka -> Pub/Sub bridge: src/streaming/kafka_to_pubsub_bridge.py
+- Smart Router pipeline: src/dataflow/beam_router.py
+- BigQuery setup (bash): infra/bigquery/setup_bigquery.sh
+- BigQuery setup (PowerShell): infra/bigquery/setup_bigquery.ps1
+- dbt project: dbt/thelook_dwh
+- Dashboard: src/dashboard/app.py
 
-### Hybrid Execution Model
-- **Local Dev Mode**: Extracts from `data/*.csv`, transforms, and saves to `dwh/*.csv`. No GCP required.
-- **Cloud Prod Mode**: Extracts from GCS (Parquet), transforms in-memory, and loads to BigQuery.
+## Step 1: Source + CDC (Local)
 
----
+Run on Windows PowerShell:
 
-## 📁 Project Structure
-
-```text
-BTL-DWH/
-├── src/
-│   ├── etl/                # Modular ETL Pipeline
-│   │   ├── extractors/     # Local & GCS extractors
-│   │   ├── transformers/   # Domain-specific transformation logic
-│   │   ├── loaders/        # Local & BigQuery loaders
-│   │   ├── pipelines/      # Dimensions and Facts orchestration
-│   │   └── config/         # Centralized settings
-│   ├── dashboard/          # Domain-Driven BI Suite (Streamlit)
-│   │   ├── app.py          # Main Landing Page
-│   │   ├── pages/          # Multipage modules (Overview, Logistics)
-│   │   ├── components/     # Domain components (Commerce, Events, AI)
-│   │   ├── utils/          # Data providers (BQ + Local fallback)
-│   │   └── Dockerfile      # Optimized for Cloud Run
-│   ├── local_run.py        # Local ETL Execution script
-│   └── main.py             # Cloud Run ETL API (Flask)
-├── data/                   # Source CSV files (Kaggle)
-├── dwh/                    # Local processed Data Warehouse (CSV)
-├── docker-compose.yaml      # Full-stack local orchestration
-├── .env                    # Environment variables & GCP config
-└── requirements.txt        # Full project dependencies
+```powershell
+.\infra\cdc\run_step1_local.ps1
 ```
 
----
+This starts:
 
-## ⚙️ Setup & Configuration
+- postgres-source (PostgreSQL 15, logical WAL)
+- kafka
+- debezium-cdc
+- datagen
 
-1. **Environment Variables**: Create a `.env` file based on [.env.examle](file:///.env.examle):
-   ```env
-   GCP_PROJECT_ID=your-project-id
-   DATASET_ID=thelook_dwh
-   GCS_BUCKET_NAME=your-staging-bucket
-   USE_LOCAL_DWH=false  # Set to true for Local CSV mode
-   ```
+And auto-registers connector from:
 
-2. **GCP Credentials**:
-   Ensure you have a service account key or run `gcloud auth application-default login` for BigQuery access.
+- infra/cdc/connectors/debezium-connector.json
 
----
+## Step 3: BigQuery Storage Setup
 
-## 🚀 Execution Guide
+Run on Windows PowerShell:
 
-### 1. Local Data Preparation (Quick Start)
-To generate the local Data Warehouse files from raw CSVs:
-```bash
-python src/local_run.py
-```
-This will populate the `dwh/` folder with processed Fact and Dimension tables.
-
-### 2. Running the Dashboard
-The dashboard supports **Multipage** navigation and domain-driven components.
-
-**Option A: Using Docker Compose (Recommended)**
-This ignores local dependency conflicts and sets up everything automatically:
-```bash
-docker-compose up --build
-```
-Access at: [http://localhost:8501](http://localhost:8501)
-
-**Option B: Manual Streamlit Run**
-```bash
-$env:USE_LOCAL_DWH="true"; streamlit run src/dashboard/app.py
+```powershell
+.\infra\bigquery\setup_bigquery.ps1 -ProjectId "<YOUR_GCP_PROJECT>" -Location "asia-southeast1" -RawBucketPrefix "gs://my-thelook-datalake/raw"
 ```
 
-### 3. ETL via Cloud Run / API
-The project includes a Flask wrapper to trigger the ETL via HTTP (Postman/Cloud Scheduler):
-```bash
-python src/main.py
-```
-
----
-
-## ☁️ Deployment
-
-### Google Cloud Run
-Each service is containerized for easy deployment:
-- **ETL**: Build root `Dockerfile` and deploy to Cloud Run.
-- **Dashboard**: Build `src/dashboard/Dockerfile` and deploy to Cloud Run (Internal Port 8080).
+Or bash:
 
 ```bash
-# Example Dashboard Deployment
-cd src/dashboard
-docker build -t gcr.io/[PROJECT-ID]/dashboard .
-docker push gcr.io/[PROJECT-ID]/dashboard
-gcloud run deploy thelook-bi --image gcr.io/[PROJECT-ID]/dashboard --port 8080
+PROJECT_ID=<YOUR_GCP_PROJECT> LOCATION=asia-southeast1 RAW_BUCKET_PREFIX=gs://my-thelook-datalake/raw ./infra/bigquery/setup_bigquery.sh
 ```
 
----
+This creates:
 
-## 🛠️ Tech Stack
-- **Languages**: Python (Pandas, Plotly, Flask, Streamlit)
-- **Infrastructure**: Google Cloud Platform (BigQuery, GCS, Cloud Run)
-- **DevOps**: Docker, Docker Compose
+- dataset thelook_bronze
+- dataset thelook_gold
+- external tables in thelook_bronze: users, products, dist_centers
+
+## Run Router + dbt + Dashboard
+
+Create Pub/Sub resources:
+
+```bash
+python src/streaming/setup_pubsub.py --project-id <YOUR_GCP_PROJECT> --topic thelook-cdc-events --subscription thelook-cdc-events-sub
+```
+
+Start bridge:
+
+```bash
+python src/streaming/kafka_to_pubsub_bridge.py --project-id <YOUR_GCP_PROJECT> --pubsub-topic thelook-cdc-events
+```
+
+Run Beam router:
+
+```bash
+python src/dataflow/beam_router.py --project <YOUR_GCP_PROJECT> --runner DirectRunner --temp_location gs://<YOUR_BUCKET>/tmp --staging_location gs://<YOUR_BUCKET>/staging --pubsub_subscription projects/<YOUR_GCP_PROJECT>/subscriptions/thelook-cdc-events-sub --bronze_dataset thelook_bronze --gcs_output_prefix gs://my-thelook-datalake/raw
+```
+
+Run dbt:
+
+```bash
+cd dbt/thelook_dwh
+dbt build --profiles-dir .
+```
+
+Run dashboard:
+
+```bash
+streamlit run src/dashboard/app.py
+```
