@@ -97,5 +97,19 @@ services:
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
 
+  debezium-server:
+    image: debezium/server:2.6
+    container_name: debezium-server
+    depends_on:
+      postgres-source:
+        condition: service_healthy
+    volumes:
+      - ./infra/cdc/debezium-server/conf:/debezium/conf:ro
+      - ./infra/cdc/debezium-server/data:/debezium/data
+      - ./credentials/gcp-key.json:/debezium/gcp-key.json:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/debezium/gcp-key.json
+    restart: unless-stopped
+
 volumes:
   postgres_data:
