@@ -7,7 +7,7 @@ dwh/*.csv
 __pycache__
 __pycache__/*
 *.pyc
-note
+
 
 # Terraform
 infra/terraform/.terraform/

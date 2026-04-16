@@ -70,7 +70,7 @@ resource "google_service_account" "debezium_sa" {
 # 2. Cấp quyền Pub/Sub Publisher cho Service Account này
 resource "google_project_iam_member" "pubsub_publisher" {
   project = var.project_id
-  role    = "roles/pubsub.publisher"
+  role    = "roles/pubsub.admin"
   member  = "serviceAccount:${google_service_account.debezium_sa.email}"
 }
 

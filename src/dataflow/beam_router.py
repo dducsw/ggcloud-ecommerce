@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 from datetime import datetime
 
 import apache_beam as beam
@@ -40,6 +41,8 @@ def parse_cdc_message(raw_message: bytes) -> dict:
     operation = payload.get("op")
     cdc_timestamp = payload.get("ts_ms") or source.get("ts_ms")
 
+    logging.info(f"Routing CDC message: table={normalize_table_name(table_name)}, op={operation}")
+
     return {
         "table": normalize_table_name(table_name),
         "schema": schema_name,
@@ -52,18 +55,18 @@ def parse_cdc_message(raw_message: bytes) -> dict:
 
 
 def to_bq_row(record: dict) -> dict:
-    row_payload = record.get("after") or record.get("before") or {}
+    row_payload = dict(record.get("after") or record.get("before") or {})
     row_payload["cdc_timestamp"] = record.get("cdc_timestamp")
     row_payload["cdc_operation"] = record.get("op")
+
+    for key in list(row_payload.keys()):
+        if key.endswith("_at") and isinstance(row_payload[key], int):
+            row_payload[key] = datetime.fromtimestamp(row_payload[key] / 1000000.0, getattr(datetime, "UTC", None) or __import__("datetime").timezone.utc).isoformat()
+
     return row_payload
 
 
-def is_hot(record: dict) -> bool:
-    return record.get("table") in HOT_TABLES
 
-
-def is_cold(record: dict) -> bool:
-    return record.get("table") not in HOT_TABLES
 
 
 class WriteColdParquetDoFn(beam.DoFn):
@@ -90,7 +93,8 @@ class WriteColdParquetDoFn(beam.DoFn):
             normalized_rows.append({column: row.get(column) for column in all_columns})
 
         arrow_table = pa.Table.from_pylist(normalized_rows)
-        window_end = datetime.utcfromtimestamp(window.end.to_utc_datetime().timestamp())
+        # Using timezone-aware UTC datetime to fix Python DeprecationWarning
+        window_end = datetime.fromtimestamp(window.end.to_utc_datetime().timestamp(), getattr(datetime, "UTC", None) or __import__("datetime").timezone.utc)
         processing_time = window_end.strftime("%Y%m%d%H%M%S")
 
         output_path = (
@@ -109,6 +113,7 @@ class WriteColdParquetDoFn(beam.DoFn):
 
 
 def run(argv=None):
+    logging.getLogger().setLevel(logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", required=True)
     parser.add_argument("--region", default="asia-southeast1")
@@ -116,6 +121,7 @@ def run(argv=None):
     parser.add_argument("--temp_location", required=True)
     parser.add_argument("--staging_location", required=True)
     parser.add_argument("--pubsub_subscription", required=True)
+    parser.add_argument("--events_subscription", required=True, help="Subscription for the clickstream events topic")
     parser.add_argument("--bronze_dataset", default="thelook_bronze")
     parser.add_argument("--gcs_output_prefix", default="gs://my-thelook-datalake/raw")
 
@@ -134,14 +140,23 @@ def run(argv=None):
     pipeline_options.view_as(SetupOptions).save_main_session = True
 
     with beam.Pipeline(options=pipeline_options) as pipeline:
-        parsed_messages = (
+        parsed_main = (
             pipeline
-            | "ReadPubSub" >> beam.io.ReadFromPubSub(subscription=known_args.pubsub_subscription)
-            | "ParseCDCJSON" >> beam.Map(parse_cdc_message)
+            | "ReadMainPubSub" >> beam.io.ReadFromPubSub(subscription=known_args.pubsub_subscription)
+            | "ParseMainJSON" >> beam.Map(parse_cdc_message)
         )
 
-        hot_records = parsed_messages | "FilterHotTables" >> beam.Filter(is_hot)
-        cold_records = parsed_messages | "FilterColdTables" >> beam.Filter(is_cold)
+        parsed_events = (
+            pipeline
+            | "ReadEventsPubSub" >> beam.io.ReadFromPubSub(subscription=known_args.events_subscription)
+            | "ParseEventsJSON" >> beam.Map(parse_cdc_message)
+        )
+
+        hot_main = parsed_main | "FilterHotMain" >> beam.Filter(lambda r: r.get("table") in {"orders"})
+        cold_main = parsed_main | "FilterColdMain" >> beam.Filter(lambda r: r.get("table") not in {"orders"})
+
+        hot_records = (hot_main, parsed_events) | "MergeHot" >> beam.Flatten()
+        cold_records = (cold_main, parsed_events) | "MergeCold" >> beam.Flatten()
 
         for table_name in HOT_TABLES:
             (

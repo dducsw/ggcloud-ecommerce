@@ -16,3 +16,4 @@ python-dotenv
 streamlit
 plotly
 google-cloud-bigquery-storage
+google-cloud-pubsub

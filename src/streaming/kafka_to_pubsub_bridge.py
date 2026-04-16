@@ -15,11 +15,13 @@ def main():
         default="thelook.public.users,thelook.public.orders,thelook.public.order_items,thelook.public.events,thelook.public.products,thelook.public.distribution_centers",
     )
     parser.add_argument("--project-id", required=True)
-    parser.add_argument("--pubsub-topic", required=True, help="Pub/Sub topic name (not full path)")
+    parser.add_argument("--pubsub-topic", required=True, help="Pub/Sub topic name for general events")
+    parser.add_argument("--pubsub-topic-events", default="thelook_clickstream_events", help="Pub/Sub topic name specifically for the events table")
     args = parser.parse_args()
 
     publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(args.project_id, args.pubsub_topic)
+    topic_path_main = publisher.topic_path(args.project_id, args.pubsub_topic)
+    topic_path_events = publisher.topic_path(args.project_id, args.pubsub_topic_events)
 
     consumer = Consumer(
         {
@@ -32,7 +34,7 @@ def main():
 
     topics = [t.strip() for t in args.topics.split(",") if t.strip()]
     consumer.subscribe(topics)
-    print(f"Bridging Kafka topics {topics} -> Pub/Sub {topic_path}")
+    print(f"Bridging Kafka topics {topics} -> Pub/Sub {topic_path_main} & {topic_path_events}")
 
     try:
         while True:
@@ -52,8 +54,11 @@ def main():
                 "value_json": msg.value().decode("utf-8") if msg.value() else None,
             }
 
+            # Route 'events' table to specific topic
+            target_topic = topic_path_events if "events" in msg.topic() else topic_path_main
+
             future = publisher.publish(
-                topic_path,
+                target_topic,
                 json.dumps(payload).encode("utf-8"),
                 source_topic=msg.topic(),
             )
