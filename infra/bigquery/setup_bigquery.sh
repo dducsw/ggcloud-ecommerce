@@ -3,8 +3,8 @@ set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-}"
 LOCATION="${LOCATION:-US}"
-BRONZE_DATASET="${BRONZE_DATASET:-thelook_bronze}"
-GOLD_DATASET="${GOLD_DATASET:-thelook_gold}"
+BRONZE_DATASET="${BRONZE_DATASET:-thelook_staging}"
+GOLD_DATASET="${GOLD_DATASET:-thelook_datawarehouse}"
 RAW_BUCKET_PREFIX="${RAW_BUCKET_PREFIX:-gs://my-thelook-datalake/raw}"
 
 if [[ -z "${PROJECT_ID}" ]]; then
@@ -24,7 +24,9 @@ create_dataset_if_missing() {
 
 create_external_table() {
   local table_name="$1"
-  local source_uri="${RAW_BUCKET_PREFIX}/${table_name}/*.parquet"
+  # ** glob bao cover tat ca subdirectory (date=.../hour=...)
+  local source_uri="${RAW_BUCKET_PREFIX}/${table_name}/**"
+  local hive_prefix="${RAW_BUCKET_PREFIX}/${table_name}/"
 
   if bq --project_id="${PROJECT_ID}" show "${PROJECT_ID}:${BRONZE_DATASET}.${table_name}" >/dev/null 2>&1; then
     bq --project_id="${PROJECT_ID}" rm -f -t "${PROJECT_ID}:${BRONZE_DATASET}.${table_name}"
@@ -33,7 +35,7 @@ create_external_table() {
 
   bq --project_id="${PROJECT_ID}" mk \
     --table \
-    --external_table_definition="AUTODETECT=TRUE,source_format=PARQUET,uris=${source_uri}" \
+    --external_table_definition="AUTODETECT=TRUE,source_format=PARQUET,hive_partitioning_mode=AUTO,hive_partitioning_source_uri_prefix=${hive_prefix},uris=${source_uri}" \
     "${PROJECT_ID}:${BRONZE_DATASET}.${table_name}"
 
   echo "Created/updated external table: ${PROJECT_ID}:${BRONZE_DATASET}.${table_name} -> ${source_uri}"
@@ -42,8 +44,17 @@ create_external_table() {
 create_dataset_if_missing "${BRONZE_DATASET}"
 create_dataset_if_missing "${GOLD_DATASET}"
 
-create_external_table "users"
-create_external_table "products"
-create_external_table "dist_centers"
+EXTERNAL_TABLES=(
+  "users"
+  "products"
+  "dist_centers"
+  "inventory_items"
+  "order_items"
+  "orders"
+)
+
+for table in "${EXTERNAL_TABLES[@]}"; do
+  create_external_table "${table}"
+done
 
 echo "BigQuery environment setup complete."

@@ -5,8 +5,10 @@ thelook_dwh:
       type: bigquery
       method: service-account
       project: "{{ env_var('GCP_PROJECT_ID') }}"
-      dataset: "{{ env_var('BRONZE_DATASET_ID', 'thelook_bronze') }}"
+      dataset: "{{ env_var('BRONZE_DATASET_ID', 'thelook_staging') }}"
       threads: 4
       keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
       location: "{{ env_var('BQ_LOCATION', 'asia-southeast1') }}"
       priority: interactive
+      execution_project: "{{ env_var('GCP_PROJECT_ID') }}"
+      timeout_seconds: 300

@@ -60,7 +60,7 @@ This creates:
 
 - dataset thelook_bronze
 - dataset thelook_gold
-- external tables in thelook_bronze: users, products, dist_centers
+- external tables in thelook_bronze: users, products, dist_centers, inventory_items, order_items
 
 ## Run Router + dbt + Dashboard
 
@@ -85,6 +85,18 @@ python src/dataflow/beam_router.py --project <YOUR_GCP_PROJECT> --runner DirectR
 Run dbt:
 
 ```bash
+cd dbt/thelook_dwh
+dbt build --profiles-dir .
+```
+
+Windows PowerShell (set env vars before running dbt):
+
+```powershell
+$env:GCP_PROJECT_ID="<YOUR_GCP_PROJECT>"
+$env:BRONZE_DATASET_ID="thelook_bronze"
+$env:GOLD_DATASET_ID="thelook_gold"
+$env:BQ_LOCATION="asia-southeast1"
+$env:GOOGLE_APPLICATION_CREDENTIALS="<ABSOLUTE_PATH_TO_SERVICE_ACCOUNT_JSON>"
 cd dbt/thelook_dwh
 dbt build --profiles-dir .
 ```

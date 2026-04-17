@@ -17,11 +17,16 @@ select
     shipped_at,
     delivered_at,
     returned_at,
-    num_of_item
+    num_of_item,
+    cdc_timestamp,
+    cdc_operation
 from {{ ref('stg_orders') }}
 {% if is_incremental() %}
-where created_at >= (
-    select coalesce(max(created_at), timestamp('1970-01-01'))
+-- Dùng cdc_timestamp (được Beam gàn từ Debezium ts_ms) thay vì created_at.
+-- Bắt được CDC update của orders cũ (status: processing→shipped→delivered)
+-- khi created_at không thay đổi.
+where cdc_timestamp >= (
+    select coalesce(max(cdc_timestamp), 0)
     from {{ this }}
 )
 {% endif %}

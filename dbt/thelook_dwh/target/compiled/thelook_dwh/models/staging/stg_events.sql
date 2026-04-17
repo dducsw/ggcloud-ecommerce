@@ -1,4 +1,4 @@
-{{ config(materialized='view') }}
+
 
 with events_base as (
     select
@@ -19,7 +19,7 @@ with events_base as (
         -- CDC metadata
         cast(cdc_timestamp as int64) as cdc_timestamp,
         cast(cdc_operation as string) as cdc_operation
-    from {{ source('thelook_ecommerce', 'events') }}
+    from `cloud-data-project-492514`.`thelook_staging`.`events`
     where cast(id as int64) is not null
       and cast(user_id as int64) is not null
       and cast(sequence_number as int64) >= 0

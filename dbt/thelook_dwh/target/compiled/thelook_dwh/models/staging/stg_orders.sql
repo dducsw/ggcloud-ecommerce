@@ -1,4 +1,4 @@
-{{ config(materialized='view') }}
+
 
 with orders_base as (
     select
@@ -14,7 +14,7 @@ with orders_base as (
         -- CDC metadata: dùng để dedup và incremental
         cast(cdc_timestamp as int64) as cdc_timestamp,
         cast(cdc_operation as string) as cdc_operation
-    from {{ source('thelook_ecommerce', 'orders') }}
+    from `cloud-data-project-492514`.`thelook_staging`.`orders`
     where cast(coalesce(id, order_id) as int64) is not null
       and cast(user_id as int64) is not null
       and cast(num_of_item as int64) >= 0

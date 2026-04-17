@@ -1,6 +1,8 @@
 $PROJECT_ID = "cloud-data-project-492514"
 $BUCKET = "gs://etl-staging-0"
-$DATASET = "staging"
+$DATASET = "thelook_staging"
+
+$env:GOOGLE_APPLICATION_CREDENTIALS = "credentials\gcp-key.json"
 
 Write-Host " Khởi động Apache Beam Dataflow Router (DirectRunner)..." -ForegroundColor Cyan
 

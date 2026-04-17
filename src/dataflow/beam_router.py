@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-HOT_TABLES = {"events", "orders"}
+HOT_TABLES = {"events"}
 
 
 def normalize_table_name(table_name: str) -> str:
@@ -97,9 +97,14 @@ class WriteColdParquetDoFn(beam.DoFn):
         window_end = datetime.fromtimestamp(window.end.to_utc_datetime().timestamp(), getattr(datetime, "UTC", None) or __import__("datetime").timezone.utc)
         processing_time = window_end.strftime("%Y%m%d%H%M%S")
 
+        # Hive-style partitioning: date=YYYY-MM-DD/hour=HH
+        # BQ External Table với hive_partitioning_mode=AUTO sẽ tự nhận partition key
+        date_str = window_end.strftime("%Y-%m-%d")
+        hour_str = window_end.strftime("%H")
+
         output_path = (
             f"{self.output_prefix}/{table_name}/"
-            f"window_end={processing_time}/part-{processing_time}.parquet"
+            f"date={date_str}/hour={hour_str}/part-{processing_time}.parquet"
         )
 
         with FileSystems.create(output_path) as file_handle:
@@ -122,7 +127,7 @@ def run(argv=None):
     parser.add_argument("--staging_location", required=True)
     parser.add_argument("--pubsub_subscription", required=True)
     parser.add_argument("--events_subscription", required=True, help="Subscription for the clickstream events topic")
-    parser.add_argument("--bronze_dataset", default="thelook_bronze")
+    parser.add_argument("--bronze_dataset", default="thelook_staging")
     parser.add_argument("--gcs_output_prefix", default="gs://my-thelook-datalake/raw")
 
     known_args, pipeline_args = parser.parse_known_args(argv)
@@ -152,11 +157,33 @@ def run(argv=None):
             | "ParseEventsJSON" >> beam.Map(parse_cdc_message)
         )
 
-        hot_main = parsed_main | "FilterHotMain" >> beam.Filter(lambda r: r.get("table") in {"orders"})
-        cold_main = parsed_main | "FilterColdMain" >> beam.Filter(lambda r: r.get("table") not in {"orders"})
+        # Hot path: events topic → BigQuery Streaming Inserts
+        # Cold path: all main CDC tables (users/products/dist_centers/inventory_items/orders/order_items) → GCS Parquet
+        hot_records = parsed_events
+        cold_records = parsed_main
 
-        hot_records = (hot_main, parsed_events) | "MergeHot" >> beam.Flatten()
-        cold_records = (cold_main, parsed_events) | "MergeCold" >> beam.Flatten()
+        # Schema inline cho events — BQ streaming insert cần schema khi CREATE_IF_NEEDED
+        events_bq_schema = {
+            "fields": [
+                {"name": "id",             "type": "INTEGER", "mode": "NULLABLE"},
+                {"name": "user_id",        "type": "INTEGER", "mode": "NULLABLE"},
+                {"name": "sequence_number","type": "INTEGER", "mode": "NULLABLE"},
+                {"name": "session_id",     "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "created_at",     "type": "TIMESTAMP","mode": "NULLABLE"},
+                {"name": "ip_address",     "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "city",           "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "state",          "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "postal_code",    "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "browser",        "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "traffic_source", "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "uri",            "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "event_type",     "type": "STRING",  "mode": "NULLABLE"},
+                {"name": "cdc_timestamp",  "type": "INTEGER", "mode": "NULLABLE"},
+                {"name": "cdc_operation",  "type": "STRING",  "mode": "NULLABLE"},
+            ]
+        }
+
+        table_schemas = {"events": events_bq_schema}
 
         for table_name in HOT_TABLES:
             (
@@ -166,6 +193,7 @@ def run(argv=None):
                 | f"Write_{table_name}_BQ"
                 >> WriteToBigQuery(
                     table=f"{known_args.project}:{known_args.bronze_dataset}.{table_name}",
+                    schema=table_schemas.get(table_name),
                     write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
                     create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
                     method=WriteToBigQuery.Method.STREAMING_INSERTS,

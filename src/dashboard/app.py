@@ -66,8 +66,8 @@ def fetch_orders_last_hour(client: bigquery.Client, project_id: str, gold_datase
 def main() -> None:
     client = get_bq_client()
     project_id = client.project
-    gold_dataset = os.getenv("GOLD_DATASET_ID", "thelook_gold")
-    bronze_dataset = os.getenv("BRONZE_DATASET_ID", "thelook_bronze")
+    gold_dataset = os.getenv("GOLD_DATASET_ID", "thelook_datawarehouse")
+    bronze_dataset = os.getenv("BRONZE_DATASET_ID", "thelook_staging")
 
     st.title("TheLook Realtime Lakehouse Dashboard")
     st.caption("Nguon du lieu: BigQuery Gold + Bronze")

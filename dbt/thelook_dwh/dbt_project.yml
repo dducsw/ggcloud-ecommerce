@@ -11,7 +11,10 @@ models:
   thelook_dwh:
     staging:
       +materialized: view
-      +schema: "{{ env_var('BRONZE_DATASET_ID', 'thelook_bronze') }}"
+      +dataset: thelook_staging
     marts:
       +materialized: table
-      +schema: "{{ env_var('GOLD_DATASET_ID', 'thelook_gold') }}"
+      +dataset: thelook_datawarehouse
+
+vars:
+  raw_source_dataset: thelook_staging
