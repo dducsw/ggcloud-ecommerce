@@ -8,10 +8,10 @@ with order_items_base as (
         cast(product_id as int64) as product_id,
         cast(inventory_item_id as int64) as inventory_item_id,
         coalesce(cast(status as string), 'Unknown') as status,
-        cast(created_at as timestamp) as created_at,
-        cast(shipped_at as timestamp) as shipped_at,
-        cast(delivered_at as timestamp) as delivered_at,
-        cast(returned_at as timestamp) as returned_at,
+        {{ to_bq_timestamp('created_at') }} as created_at,
+        {{ to_bq_timestamp('shipped_at') }} as shipped_at,
+        {{ to_bq_timestamp('delivered_at') }} as delivered_at,
+        {{ to_bq_timestamp('returned_at') }} as returned_at,
         cast(sale_price as numeric) as sale_price
     from {{ source('thelook_ecommerce', 'order_items') }}
     where cast(id as int64) is not null

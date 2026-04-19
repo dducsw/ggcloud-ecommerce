@@ -1,0 +1,16 @@
+{
+  "hivePartitioningOptions": {
+    "mode": "AUTO",
+    "sourceUriPrefix": "gs://etl-staging-0/raw/products/"
+  },
+  "parquetOptions": {
+    "enableListInference": false,
+    "enumAsString": false,
+    "mapTargetType": null
+  },
+  "sourceFormat": "PARQUET",
+  "sourceUris": [
+    "gs://etl-staging-0/raw/products/*"
+  ],
+  "timestampTargetPrecision": []
+}

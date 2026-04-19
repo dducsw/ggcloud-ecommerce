@@ -3,8 +3,8 @@
 select
     cast(id as int64) as inventory_item_id,
     cast(product_id as int64) as product_id,
-    cast(created_at as timestamp) as created_at,
-    cast(sold_at as timestamp) as sold_at,
+    {{ to_bq_timestamp('created_at') }} as created_at,
+    {{ to_bq_timestamp('sold_at') }} as sold_at,
     cast(cost as numeric) as cost,
     cast(product_category as string) as product_category,
     cast(product_name as string) as product_name,

@@ -1,4 +1,16 @@
-{{ config(materialized='table') }}
+
+  
+    
+
+    create or replace table `cloud-data-project-492514`.`thelook_datawarehouse`.`dim_products`
+      
+    
+    
+
+    
+    OPTIONS()
+    as (
+      
 
 with valid_products as (
     select
@@ -11,7 +23,7 @@ with valid_products as (
         retail_price,
         distribution_center_id,
         created_at
-    from {{ ref('stg_products') }}
+    from `cloud-data-project-492514`.`thelook_staging`.`stg_products`
 )
 
 select
@@ -44,3 +56,5 @@ where not exists (
     from valid_products
     where product_id = -1
 )
+    );
+  

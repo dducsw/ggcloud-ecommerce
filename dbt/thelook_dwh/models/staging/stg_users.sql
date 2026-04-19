@@ -15,6 +15,6 @@ select
     cast(latitude as float64) as latitude,
     cast(longitude as float64) as longitude,
     cast(traffic_source as string) as traffic_source,
-    cast(created_at as timestamp) as created_at,
-    cast(updated_at as timestamp) as updated_at
+    {{ to_bq_timestamp('created_at') }} as created_at,
+    {{ to_bq_timestamp('updated_at') }} as updated_at
 from {{ source('thelook_ecommerce', 'users') }}

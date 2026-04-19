@@ -1,4 +1,4 @@
-{{ config(materialized='table') }}
+
 
 with valid_products as (
     select
@@ -11,7 +11,7 @@ with valid_products as (
         retail_price,
         distribution_center_id,
         created_at
-    from {{ ref('stg_products') }}
+    from `cloud-data-project-492514`.`thelook_staging`.`stg_products`
 )
 
 select

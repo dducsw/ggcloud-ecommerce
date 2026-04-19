@@ -1,6 +1,6 @@
 
 
-  create or replace view `cloud-data-project-492514`.`thelook_staging_thelook_staging`.`stg_distribution_centers`
+  create or replace view `cloud-data-project-492514`.`thelook_staging`.`stg_distribution_centers`
   OPTIONS()
   as 
 

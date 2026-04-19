@@ -2,20 +2,20 @@
 
 with orders_base as (
     select
-        cast(coalesce(id, order_id) as int64) as order_id,
+        cast(order_id as int64) as order_id,
         cast(user_id as int64) as user_id,
         coalesce(cast(status as string), 'Unknown') as status,
         coalesce(cast(gender as string), 'Unknown') as gender,
-        cast(created_at as timestamp) as created_at,
-        cast(shipped_at as timestamp) as shipped_at,
-        cast(delivered_at as timestamp) as delivered_at,
-        cast(returned_at as timestamp) as returned_at,
+        {{ to_bq_timestamp('created_at') }} as created_at,
+        {{ to_bq_timestamp('shipped_at') }} as shipped_at,
+        {{ to_bq_timestamp('delivered_at') }} as delivered_at,
+        {{ to_bq_timestamp('returned_at') }} as returned_at,
         cast(num_of_item as int64) as num_of_item,
         -- CDC metadata: dùng để dedup và incremental
         cast(cdc_timestamp as int64) as cdc_timestamp,
         cast(cdc_operation as string) as cdc_operation
     from {{ source('thelook_ecommerce', 'orders') }}
-    where cast(coalesce(id, order_id) as int64) is not null
+        where cast(order_id as int64) is not null
       and cast(user_id as int64) is not null
       and cast(num_of_item as int64) >= 0
       -- Bỏ qua hard delete CDC events
