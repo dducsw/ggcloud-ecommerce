@@ -3,6 +3,7 @@ import asyncio
 import random
 import logging
 import datetime
+import os
 
 from faker import Faker
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
@@ -10,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from src.db_writer import DataWriter
 from src.models import User, Order, OrderItem, Event, OrderStatus, EventCategory
 from src.utils import generate_from_csv
+from src.clickstream.event_publisher import ClickstreamEventPublisher
 
 logging.basicConfig(
     level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
@@ -37,6 +39,12 @@ class TheLookECommSimulator:
         self.max_consecutive_errors = 3
         self._next_inventory_item_id = None
         self.product_lookup = {}
+        self.clickstream_publisher = None
+        if args.publish_clickstream:
+            self.clickstream_publisher = ClickstreamEventPublisher(
+                project_id=args.gcp_project_id,
+                topic_name=args.clickstream_topic,
+            )
 
     def _build_product_lookup(self, products: list[dict]) -> dict[int, dict]:
         lookup = {}
@@ -259,6 +267,9 @@ class TheLookECommSimulator:
                 conflict_keys=["id"],
             ),
         )
+        if self.clickstream_publisher:
+            for event in purchase_events:
+                await asyncio.to_thread(self.clickstream_publisher.publish, event)
 
     def _simulate_order_update(self):
         """Synchronous helper containing the logic for updating an order. To be run in a thread."""
@@ -322,6 +333,9 @@ class TheLookECommSimulator:
         )
         if random_events:
             self.writer.upsert(table="events", data=random_events, conflict_keys=["id"])
+            if self.clickstream_publisher:
+                for event in random_events:
+                    self.clickstream_publisher.publish(event)
 
     async def _simulate_side_tasks(self):
         """Runs secondary simulation events based on their respective probabilities."""
@@ -469,9 +483,14 @@ def main():
     ## --- Kafka Arguments ---
     parser.add_argument("--bootstrap-servers", type=str, default="localhost:9092", help="Bootstrap server addresses.")
     parser.add_argument("--topic-prefix", type=str, default="ecomm", help="Kafka topic prefix.")
+    parser.add_argument("--publish-clickstream", action="store_true", help="Publish generated events to Pub/Sub.")
+    parser.add_argument("--gcp-project-id", type=str, default=os.getenv("GCP_PROJECT_ID"), help="GCP project for Pub/Sub publishing.")
+    parser.add_argument("--clickstream-topic", type=str, default="clickstream", help="Pub/Sub topic for clickstream events.")
     # fmt: on
 
     args = parser.parse_args()
+    if args.publish_clickstream and not args.gcp_project_id:
+        raise ValueError("gcp-project-id is required when --publish-clickstream is enabled.")
     logging.info(args)
 
     try:
