@@ -7,11 +7,19 @@ Pipeline clickstream hiện tại:
 - Dataflow thực hiện validation, dead-letter, event-time windowing, aggregate 5 phút, sessionization, enrichment product và stateful dedup
 - BigQuery lưu các bảng `events_raw`, `events_deadletter`, `events_5m`, `session_metrics`
 
-## Chạy BigQuery setup
+## Khởi tạo hạ tầng (Dataset, Pub/Sub, Tables, Views)
+
+Sử dụng script Python để khởi tạo toàn bộ hạ tầng cần thiết:
 
 ```powershell
-.\infra\bigquery\setup_clickstream_bigquery.ps1 -ProjectId <GCP_PROJECT_ID> -Location asia-southeast1
+# Chạy lần đầu hoặc cập nhật infra
+python src/clickstream/init_infra.py --project <GCP_PROJECT_ID>
+
+# Chạy khi muốn xóa sạch dữ liệu BigQuery trước khi test
+python src/clickstream/init_infra.py --project <GCP_PROJECT_ID> --truncate
 ```
+
+(Hoặc dùng script PowerShell cũ: `.\infra\bigquery\setup_clickstream_bigquery.ps1 -ProjectId <GCP_PROJECT_ID>`)
 
 ## Chạy Dataflow
 
@@ -22,7 +30,7 @@ Pipeline clickstream hiện tại:
 ## Chạy datagen publish clickstream
 
 ```powershell
-python datagen/thelook-ecomm/generator.py --publish-clickstream --gcp-project-id <GCP_PROJECT_ID> --clickstream-topic clickstream
+python datagen/thelook-ecomm/generator.py --publish-clickstream --gcp-project-id <GCP_PROJECT_ID> --clickstream-topic clickstream_topic
 ```
 
 ## Outputs

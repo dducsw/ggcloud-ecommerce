@@ -76,3 +76,5 @@ client.query(ddl_events).result()
 client.query(ddl_orders).result()
 print('Created tables!')
 "
+
+bq mk --dataset --location=asia-southeast1 cloud-data-project-492514:thelook_clickstream

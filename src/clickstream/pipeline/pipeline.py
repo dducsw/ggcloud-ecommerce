@@ -60,32 +60,16 @@ def run_pipeline(args, pipeline_args):
         )
         refresh_interval_seconds = args.product_refresh_minutes * 60
 
+        # Note: PeriodicImpulse can be unstable in some DirectRunner versions for streaming.
+        # For local testing, we use a single load. In production (Dataflow), we can re-enable refresh.
         product_side_input = beam.pvalue.AsSingleton(
-            (
-                pipeline
-                | "PeriodicProductRefresh"
-                >> PeriodicImpulse(
-                    start_timestamp=utc_now().timestamp(),
-                    fire_interval=refresh_interval_seconds,
-                    apply_windowing=False,
-                )
-                | "LoadProductMap"
-                >> beam.Map(
-                    lambda _: load_product_dimension(
-                        project_id=args.product_lookup_project or args.project,
-                        dataset=args.product_lookup_dataset,
-                        table=args.product_lookup_table,
-                        fallback_csv_path=args.products_csv,
-                    )
-                )
-                | "LatestProductMap" >> Latest.Globally()
-            ),
-            default_value=initial_product_map,
+            pipeline
+            | "CreateInitialProductMap" >> beam.Create([initial_product_map])
         )
 
         parsed = (
             pipeline
-            | "ReadClickstreamPubSub" >> beam.io.ReadFromPubSub(subscription=args.subscription)
+            | "ReadClickstreamPubSub" >> beam.io.ReadFromPubSub(subscription=args.events_subscription)
             | "ParseValidate"
             >> beam.ParDo(ParseValidateDoFn()).with_outputs(ParseValidateDoFn.DEADLETTER_TAG, main="valid")
         )

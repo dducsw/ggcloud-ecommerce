@@ -4,5 +4,6 @@ pyarrow
 google-cloud-bigquery
 python-dotenv
 streamlit
+altair
 plotly
 google-cloud-bigquery-storage

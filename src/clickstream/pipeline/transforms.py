@@ -73,7 +73,13 @@ class ParseValidateDoFn(beam.DoFn):
 class EnrichEventDoFn(beam.DoFn):
     def process(self, row: dict, product_map: dict):
         enriched = dict(row)
-        uri_info = parse_uri(enriched.get("uri"))
+        uri = enriched.get("uri")
+        try:
+            uri_info = parse_uri(uri)
+        except Exception as e:
+            logging.warning(f"Failed to parse URI {uri}: {e}")
+            uri_info = {"page_type": "unknown", "product_id": None}
+            
         product_id = uri_info["product_id"]
         product = product_map.get(product_id) if product_id is not None else None
         event_ts = parse_iso8601(enriched["event_timestamp"])

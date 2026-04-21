@@ -10,10 +10,10 @@ def run(argv=None):
     parser = argparse.ArgumentParser(description="Advanced clickstream processing from Pub/Sub to BigQuery")
     parser.add_argument("--project", required=True)
     parser.add_argument("--region", default="asia-southeast1")
-    parser.add_argument("--runner", default="DataflowRunner")
+    parser.add_argument("--runner", default="DirectRunner", help="Beam Runner (DirectRunner or DataflowRunner)")
     parser.add_argument("--temp_location", required=True)
     parser.add_argument("--staging_location", required=True)
-    parser.add_argument("--subscription", required=True)
+    parser.add_argument("--events_subscription", required=True, help="Pub/Sub subscription for clickstream events")
     parser.add_argument("--dataset", default="thelook_clickstream")
     parser.add_argument("--raw_table", default="events_raw")
     parser.add_argument("--deadletter_table", default="events_deadletter")
@@ -31,6 +31,7 @@ def run(argv=None):
     parser.add_argument("--dedup_ttl_minutes", type=int, default=60)
 
     known_args, pipeline_args = parser.parse_known_args(argv)
+    logging.info(f"Starting clickstream pipeline with runner: {known_args.runner}")
     run_pipeline(known_args, pipeline_args)
 
 

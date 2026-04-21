@@ -1,102 +1,120 @@
-import os
-import time
+import datetime as dt
 
-import pandas as pd
 import streamlit as st
-from google.cloud import bigquery
+
+from utils.data_provider import data_provider
 
 
-st.set_page_config(page_title="TheLook Realtime Dashboard", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Clickstream Analysis", layout="wide", initial_sidebar_state="expanded")
 
 
-@st.cache_resource
-def get_bq_client() -> bigquery.Client:
-    project_id = os.getenv("GCP_PROJECT_ID")
-    return bigquery.Client(project=project_id) if project_id else bigquery.Client()
+def inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.2rem;
+            padding-bottom: 1.2rem;
+            max-width: 1400px;
+        }
+        .metric-card {
+            border: 1px solid #d9dee7;
+            background: #ffffff;
+            border-radius: 4px;
+            padding: 16px 18px;
+            min-height: 108px;
+        }
+        .metric-label {
+            font-size: 0.85rem;
+            color: #5d6b82;
+            margin-bottom: 8px;
+        }
+        .metric-value {
+            font-size: 1.9rem;
+            font-weight: 600;
+            color: #1e2a3a;
+            line-height: 1.1;
+        }
+        .metric-subtle {
+            font-size: 0.82rem;
+            color: #6e7b8f;
+            margin-top: 8px;
+        }
+        div[data-testid="stMetric"] {
+            border: 1px solid #d9dee7;
+            background: #ffffff;
+            padding: 14px 16px;
+            border-radius: 4px;
+        }
+        h1, h2, h3 {
+            color: #172231;
+            letter-spacing: -0.02em;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def fetch_metrics(client: bigquery.Client, project_id: str, gold_dataset: str, bronze_dataset: str) -> dict:
-    metric_query = f"""
-        with revenue_cte as (
-            select coalesce(sum(sale_price), 0) as total_revenue
-            from `{project_id}.{gold_dataset}.fact_orders`
-        ),
-        active_users_cte as (
-            select count(distinct user_id) as active_users
-            from `{project_id}.{gold_dataset}.fact_orders`
-            where order_created_at >= timestamp_sub(current_timestamp(), interval 1 hour)
-        ),
-        live_events_cte as (
-            select count(*) as live_events_count
-            from `{project_id}.{bronze_dataset}.events`
-            where coalesce(
-                timestamp_millis(safe_cast(cdc_timestamp as int64)),
-                cast(cdc_timestamp as timestamp)
-            ) >= timestamp_sub(current_timestamp(), interval 5 minute)
+def build_sidebar():
+    latest_date = data_provider.get_latest_event_date()
+    default_end = latest_date or dt.date.today()
+    default_start = default_end - dt.timedelta(days=6)
+
+    st.sidebar.title("Clickstream Analysis")
+    st.sidebar.caption("BigQuery source")
+    date_range = st.sidebar.date_input(
+        "Date range",
+        value=(default_start, default_end),
+        max_value=default_end,
+    )
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        start_date = default_start
+        end_date = default_end
+
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"Project: `{data_provider.project_id}`")
+    st.sidebar.write(f"Dataset: `{data_provider.clickstream_dataset}`")
+    st.sidebar.write(f"Latest event date: `{default_end}`")
+    return start_date, end_date
+
+
+def main():
+    inject_styles()
+    start_date, end_date = build_sidebar()
+
+    st.title("Clickstream Analysis")
+    st.caption("Operational dashboard for clickstream monitoring, session quality and conversion flow")
+
+    overview_metrics = data_provider.get_overview_metrics(str(start_date), str(end_date))
+    cols = st.columns(4)
+    metric_specs = [
+        ("Total events", f"{int(overview_metrics.get('total_events', 0)):,}", "Raw deduped events in range"),
+        ("Total sessions", f"{int(overview_metrics.get('total_sessions', 0)):,}", "Distinct sessions in range"),
+        ("Conversion rate", f"{float(overview_metrics.get('conversion_rate') or 0):.2%}", "Purchases per session"),
+        ("Avg. session length", f"{float(overview_metrics.get('avg_session_seconds') or 0) / 60:.1f} min", "Average session duration"),
+    ]
+    for col, (label, value, subtle) in zip(cols, metric_specs):
+        col.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-label">{label}</div>
+                <div class="metric-value">{value}</div>
+                <div class="metric-subtle">{subtle}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        select
-            r.total_revenue,
-            a.active_users,
-            l.live_events_count
-        from revenue_cte r
-        cross join active_users_cte a
-        cross join live_events_cte l
-    """
-    row = next(client.query(metric_query).result())
-    return {
-        "total_revenue": float(row.total_revenue or 0),
-        "active_users": int(row.active_users or 0),
-        "live_events_count": int(row.live_events_count or 0),
-    }
 
-
-def fetch_orders_last_hour(client: bigquery.Client, project_id: str, gold_dataset: str) -> pd.DataFrame:
-    chart_query = f"""
-        select
-            timestamp_trunc(order_created_at, minute) as minute_bucket,
-            count(*) as order_count
-        from `{project_id}.{gold_dataset}.fact_orders`
-        where order_created_at >= timestamp_sub(current_timestamp(), interval 1 hour)
-        group by minute_bucket
-        order by minute_bucket
-    """
-    return client.query(chart_query).to_dataframe()
-
-
-def main() -> None:
-    client = get_bq_client()
-    project_id = client.project
-    gold_dataset = os.getenv("GOLD_DATASET_ID", "thelook_datawarehouse")
-    bronze_dataset = os.getenv("BRONZE_DATASET_ID", "thelook_staging")
-
-    st.title("TheLook Realtime Lakehouse Dashboard")
-    st.caption("Nguon du lieu: BigQuery Gold + Bronze")
-
-    try:
-        metrics = fetch_metrics(client, project_id, gold_dataset, bronze_dataset)
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Revenue", f"${metrics['total_revenue']:,.2f}")
-        col2.metric("Active Users (1h)", f"{metrics['active_users']:,}")
-        col3.metric("Live Events (5m)", f"{metrics['live_events_count']:,}")
-
-        st.subheader("Orders In The Last 1 Hour")
-        orders_df = fetch_orders_last_hour(client, project_id, gold_dataset)
-        if orders_df.empty:
-            st.info("No orders in the last hour yet.")
-        else:
-            st.line_chart(orders_df.set_index("minute_bucket")["order_count"])
-    except Exception as exc:
-        st.error(f"Failed to query BigQuery: {exc}")
-
-    st.sidebar.header("Realtime Controls")
-    auto_refresh = st.sidebar.toggle("Auto refresh every 5s", value=True)
-    st.sidebar.write(f"Project: {project_id}")
-    st.sidebar.write(f"Gold dataset: {gold_dataset}")
-    st.sidebar.write(f"Bronze dataset: {bronze_dataset}")
-
-    if auto_refresh:
-        time.sleep(5)
-        st.rerun()
+    st.markdown(
+        """
+        This dashboard is organized into two focused pages:
+        Clickstream Overview for operational monitoring, and Sessions for funnel and session-depth analysis.
+        Use the page navigation in the sidebar to move between the two views.
+        """
+    )
 
 
 if __name__ == "__main__":
