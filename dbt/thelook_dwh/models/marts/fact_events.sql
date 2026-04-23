@@ -21,6 +21,10 @@ select
     browser,
     traffic_source,
     event_type,
+    case 
+        when lower(trim(event_type)) = 'purchase' then true 
+        else false 
+    end as is_checkout_event,
     uri,
     created_at
 from {{ ref('stg_events') }}

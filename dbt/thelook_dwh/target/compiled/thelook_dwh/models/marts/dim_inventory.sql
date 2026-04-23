@@ -6,6 +6,11 @@ select
     cost,
     created_at,
     sold_at,
+    case 
+        when sold_at is not null then true 
+        else false 
+    end as is_sold,
+    timestamp_diff(sold_at, created_at, DAY) as days_in_inventory,
     product_category,
     product_name,
     product_brand,

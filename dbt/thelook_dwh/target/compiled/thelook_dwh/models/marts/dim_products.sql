@@ -9,6 +9,8 @@ with valid_products as (
         department,
         sku,
         retail_price,
+        cost,
+        retail_price - cost as margin_value,
         distribution_center_id,
         created_at
     from `cloud-data-project-492514`.`thelook_staging`.`stg_products`
@@ -22,6 +24,8 @@ select
     department,
     sku,
     retail_price,
+    cost,
+    margin_value,
     distribution_center_id,
     created_at
 from valid_products
@@ -36,6 +40,8 @@ select
     'Unknown' as department,
     'N/A' as sku,
     0 as retail_price,
+    0 as cost,
+    0 as margin_value,
     -1 as distribution_center_id,
     timestamp('1970-01-01') as created_at
 from (select 1) as seed
