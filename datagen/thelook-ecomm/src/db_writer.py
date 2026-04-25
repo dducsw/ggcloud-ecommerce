@@ -42,6 +42,7 @@ class DataWriter:
         where_params: Optional[tuple] = None,
         order_by: Optional[str] = None,
         limit: Optional[int] = None,
+        for_update: bool = False,
     ):
         self._ensure_connection()
 
@@ -53,6 +54,8 @@ class DataWriter:
             sql += f" ORDER BY {order_by}"
         if limit is not None:
             sql += f" LIMIT {limit}"
+        if for_update:
+            sql += " FOR UPDATE"
 
         result = self.conn.execute(text(sql), where_params or {})
         rows = result.mappings().all()
@@ -64,6 +67,7 @@ class DataWriter:
         data: List[Union[dict, object]],
         conflict_keys: List[str],
         update_fields: Optional[List[str]] = None,
+        commit: bool = True,
     ):
         if not data:
             logging.info(f"[{table}] No rows to insert.")
@@ -94,14 +98,16 @@ class DataWriter:
                 with self.conn.connection.cursor() as cur:
                     execute_values(cur, sql, values)
 
-            self.conn.connection.commit()
+            if commit:
+                self.conn.connection.commit()
             logging.info(
                 f"[{table}] Inserted {len(rows)} rows in batches of {self.batch_size}."
             )
 
         except Exception as e:
             logging.error(f"Upsert failed for {table}: {e}")
-            self.conn.connection.rollback()
+            if commit:
+                self.conn.connection.rollback()
             raise
 
     def get_all_tables(self):
@@ -116,6 +122,14 @@ class DataWriter:
     def close(self):
         if self.conn:
             self.conn.close()
+
+    def commit(self):
+        self._ensure_connection()
+        self.conn.connection.commit()
+
+    def rollback(self):
+        self._ensure_connection()
+        self.conn.connection.rollback()
 
     def _ddl_stmts(self):
         return {

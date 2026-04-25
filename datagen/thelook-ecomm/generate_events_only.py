@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from src.clickstream.event_publisher import ClickstreamEventPublisher
 from src.db_writer import DataWriter
+from src.id_allocator import IdAllocator
 from src.models import Event, EventCategory, User
 
 
@@ -28,6 +29,8 @@ class EventsOnlySimulator:
             args.db_schema,
             args.db_batch_size,
         )
+        self.user_ids = IdAllocator()
+        self.event_ids = IdAllocator()
         self.clickstream_publisher = None
         if args.publish_clickstream:
             self.clickstream_publisher = ClickstreamEventPublisher(
@@ -37,6 +40,14 @@ class EventsOnlySimulator:
 
     async def initialize(self):
         await asyncio.to_thread(self.writer.create_tables_if_not_exists)
+        event_max = await asyncio.to_thread(
+            self.writer.select, table="events", columns=["max(id) as max_id"]
+        )
+        self.event_ids.seed_from_existing(event_max[0]["max_id"] if event_max else 0)
+        user_max = await asyncio.to_thread(
+            self.writer.select, table="users", columns=["max(id) as max_id"]
+        )
+        self.user_ids.seed_from_existing(user_max[0]["max_id"] if user_max else 0)
         user_count = await asyncio.to_thread(
             self.writer.select, table="users", columns=["count(*) as cnt"]
         )
@@ -51,6 +62,8 @@ class EventsOnlySimulator:
                 )
                 for _ in range(self.args.init_num_users)
             ]
+            for user in users:
+                user.id = self.user_ids.allocate()
             await asyncio.to_thread(
                 self.writer.upsert, table="users", data=users, conflict_keys=["id"]
             )
@@ -71,18 +84,17 @@ class EventsOnlySimulator:
             return
 
         user = User.from_dict(user_rows[0])
-        events = Event.new(
-            user=user,
-            order_item=None,
-            event_category=EventCategory.GHOST.value,
-            fake=self.fake,
-        )
+        events = Event.new(user=None, order_item=None, event_category=EventCategory.GHOST.value, fake=self.fake)
         for event in events:
+            event.id = self.event_ids.allocate()
             event.user_id = user.id
             event.city = user.city
             event.state = user.state
             event.postal_code = user.postal_code
             event.traffic_source = user.traffic_source
+            if event.event_type in {"purchase", "cancel", "return"}:
+                event.event_type = "product"
+                event.uri = event.uri if event.uri.startswith("/product/") else "/product"
 
         await asyncio.to_thread(
             self.writer.upsert, table="events", data=events, conflict_keys=["id"]
@@ -96,6 +108,11 @@ class EventsOnlySimulator:
             event_category=EventCategory.GHOST.value,
             fake=self.fake,
         )
+        for event in events:
+            event.id = self.event_ids.allocate()
+            if event.event_type in {"purchase", "cancel", "return"}:
+                event.event_type = "product"
+                event.uri = event.uri if event.uri.startswith("/product/") else "/product"
         await asyncio.to_thread(
             self.writer.upsert, table="events", data=events, conflict_keys=["id"]
         )

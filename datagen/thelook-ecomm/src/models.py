@@ -32,7 +32,12 @@ def get_additional_ddls(schema: str):
                 retail_price DOUBLE PRECISION,
                 department TEXT,
                 sku TEXT,
-                distribution_center_id BIGINT
+                distribution_center_id BIGINT,
+                CONSTRAINT chk_products_non_negative_prices
+                    CHECK (cost >= 0 AND retail_price >= 0),
+                CONSTRAINT fk_products_distribution_center
+                    FOREIGN KEY (distribution_center_id)
+                    REFERENCES {schema}.distribution_centers (id)
             );"""
         ),
         "distribution_centers": inspect.cleandoc(
@@ -58,7 +63,17 @@ def get_additional_ddls(schema: str):
                 product_retail_price DOUBLE PRECISION,
                 product_department TEXT,
                 product_sku TEXT,
-                product_distribution_center_id BIGINT
+                product_distribution_center_id BIGINT,
+                CONSTRAINT chk_inventory_cost_non_negative
+                    CHECK (cost >= 0),
+                CONSTRAINT chk_inventory_sold_after_created
+                    CHECK (sold_at IS NULL OR sold_at >= created_at),
+                CONSTRAINT fk_inventory_product
+                    FOREIGN KEY (product_id)
+                    REFERENCES {schema}.products (id),
+                CONSTRAINT fk_inventory_distribution_center
+                    FOREIGN KEY (product_distribution_center_id)
+                    REFERENCES {schema}.distribution_centers (id)
             );"""
         ),
         "heartbeat": inspect.cleandoc(
@@ -172,6 +187,7 @@ class User(ModelMixin):
         current_data = dataclasses.asdict(self)
         updated_fields = {
             "street_address": fake.street_address(),
+            "updated_at": datetime.datetime.now(),
             **get_location(country=country, state=state, postal_code=postal_code),
         }
         merged_data = {**current_data, **updated_fields}
@@ -200,7 +216,11 @@ class User(ModelMixin):
             longitude       DOUBLE PRECISION,
             traffic_source  TEXT,
             created_at      TIMESTAMP WITHOUT TIME ZONE,
-            updated_at      TIMESTAMP WITHOUT TIME ZONE
+            updated_at      TIMESTAMP WITHOUT TIME ZONE,
+            CONSTRAINT chk_users_age_valid
+                CHECK (age BETWEEN 12 AND 120),
+            CONSTRAINT chk_users_updated_after_created
+                CHECK (updated_at >= created_at)
         );
         """
         )
@@ -293,7 +313,22 @@ class Order(ModelMixin):
             returned_at     TIMESTAMP WITHOUT TIME ZONE,
             shipped_at      TIMESTAMP WITHOUT TIME ZONE,
             delivered_at    TIMESTAMP WITHOUT TIME ZONE,
-            num_of_item     INT
+            num_of_item     INT,
+            CONSTRAINT fk_orders_user
+                FOREIGN KEY (user_id)
+                REFERENCES {schema}.users (id),
+            CONSTRAINT chk_orders_num_items_positive
+                CHECK (num_of_item >= 1),
+            CONSTRAINT chk_orders_valid_status
+                CHECK (status IN ('Processing', 'Shipped', 'Complete', 'Returned', 'Cancelled')),
+            CONSTRAINT chk_orders_updated_after_created
+                CHECK (updated_at >= created_at),
+            CONSTRAINT chk_orders_shipped_after_created
+                CHECK (shipped_at IS NULL OR shipped_at >= created_at),
+            CONSTRAINT chk_orders_delivered_after_shipped
+                CHECK (delivered_at IS NULL OR shipped_at IS NULL OR delivered_at >= shipped_at),
+            CONSTRAINT chk_orders_returned_after_delivered
+                CHECK (returned_at IS NULL OR delivered_at IS NULL OR returned_at >= delivered_at)
         );
         """
         )
@@ -360,7 +395,29 @@ class OrderItem(ModelMixin):
             shipped_at          TIMESTAMP WITHOUT TIME ZONE,
             delivered_at        TIMESTAMP WITHOUT TIME ZONE,
             returned_at         TIMESTAMP WITHOUT TIME ZONE,
-            sale_price          DOUBLE PRECISION
+            sale_price          DOUBLE PRECISION,
+            CONSTRAINT fk_order_items_order
+                FOREIGN KEY (order_id)
+                REFERENCES {schema}.orders (order_id),
+            CONSTRAINT fk_order_items_user
+                FOREIGN KEY (user_id)
+                REFERENCES {schema}.users (id),
+            CONSTRAINT fk_order_items_product
+                FOREIGN KEY (product_id)
+                REFERENCES {schema}.products (id),
+            CONSTRAINT fk_order_items_inventory
+                FOREIGN KEY (inventory_item_id)
+                REFERENCES {schema}.inventory_items (id),
+            CONSTRAINT chk_order_items_sale_price_non_negative
+                CHECK (sale_price >= 0),
+            CONSTRAINT chk_order_items_updated_after_created
+                CHECK (updated_at >= created_at),
+            CONSTRAINT chk_order_items_shipped_after_created
+                CHECK (shipped_at IS NULL OR shipped_at >= created_at),
+            CONSTRAINT chk_order_items_delivered_after_shipped
+                CHECK (delivered_at IS NULL OR shipped_at IS NULL OR delivered_at >= shipped_at),
+            CONSTRAINT chk_order_items_returned_after_delivered
+                CHECK (returned_at IS NULL OR delivered_at IS NULL OR returned_at >= delivered_at)
         );
         """
         )
@@ -518,7 +575,14 @@ class Event(ModelMixin):
             traffic_source      TEXT,
             uri                 TEXT,
             event_type          TEXT,
-            created_at          TIMESTAMP WITHOUT TIME ZONE
+            created_at          TIMESTAMP WITHOUT TIME ZONE,
+            CONSTRAINT fk_events_user
+                FOREIGN KEY (user_id)
+                REFERENCES {schema}.users (id),
+            CONSTRAINT chk_events_sequence_positive
+                CHECK (sequence_number >= 1),
+            CONSTRAINT chk_events_type_valid
+                CHECK (event_type IN ('home', 'department', 'category', 'product', 'cart', 'purchase', 'cancel', 'return'))
         );
         """
         )
