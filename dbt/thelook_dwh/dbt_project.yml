@@ -7,6 +7,12 @@ profile: thelook_dwh
 model-paths: ["models"]
 clean-targets: ["target", "dbt_packages"]
 
+# Opt-in: dùng BigQuery TABLE_STORAGE metadata để check source freshness.
+# Thay vì query max(loaded_at_field), dbt dùng last_modified_time từ INFORMATION_SCHEMA.
+# Giải quyết lỗi khi timestamp column là INT64 (epoch) thay vì TIMESTAMP type.
+flags:
+  bigquery_use_batch_source_freshness: true
+
 models:
   thelook_dwh:
     staging:
@@ -18,3 +24,5 @@ models:
 
 vars:
   raw_source_dataset: thelook_staging
+  dim_date_start: '2019-01-01'
+  dim_date_end: '2027-12-31'

@@ -43,16 +43,24 @@ order_stats as (
 orders_base as (
     select
         o.order_id,
+        coalesce(u.user_key, {{ generate_surrogate_key(['-1']) }}) as user_key,
         o.user_id,
         o.status,
+        cast(format_date('%Y%m%d', date(o.created_at)) as int64) as created_date_key,
+        coalesce(cast(format_date('%Y%m%d', date(o.shipped_at)) as int64), 0) as shipped_date_key,
+        coalesce(cast(format_date('%Y%m%d', date(o.delivered_at)) as int64), 0) as delivered_date_key,
+        coalesce(cast(format_date('%Y%m%d', date(o.returned_at)) as int64), 0) as returned_date_key,
         o.created_at,
         o.shipped_at,
         o.delivered_at,
         o.returned_at,
         o.num_of_item,
+        coalesce(o.returned_at, o.delivered_at, o.shipped_at, o.created_at) as source_updated_at,
         o.cdc_timestamp,
         o.cdc_operation
     from {{ ref('stg_orders') }} o
+    left join {{ ref('dim_users') }} u
+      on o.user_id = u.user_id
     {% if is_incremental() %}
     inner join impacted_orders io on o.order_id = io.order_id
     {% endif %}
@@ -61,15 +69,20 @@ orders_base as (
 orders_with_stats as (
     select
         o.order_id,
+        o.user_key,
         o.user_id,
         o.status,
+        o.created_date_key,
+        o.shipped_date_key,
+        o.delivered_date_key,
+        o.returned_date_key,
         o.created_at,
         o.shipped_at,
         o.delivered_at,
         o.returned_at,
         o.num_of_item,
-        o.cdc_timestamp,
-        o.cdc_operation,
+        o.source_updated_at,
+        current_timestamp() as dwh_updated_at,
         
         coalesce(s.total_revenue, 0) as total_revenue,
         coalesce(s.total_cost, 0) as total_cost,

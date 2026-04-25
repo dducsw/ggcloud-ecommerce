@@ -1,0 +1,131 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: "Cleaned and deduplicated order header records from the CDC source."
+    columns:
+      - name: order_id
+        description: "Unique order identifier after CDC deduplication."
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        description: "User placing the order."
+        tests:
+          - not_null
+      - name: status
+        description: "Latest business order status from the source."
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Processing', 'Shipped', 'Complete', 'Returned', 'Cancelled', 'Unknown']
+      - name: created_at
+        description: "Order creation timestamp — required for incremental correctness."
+        tests:
+          - not_null
+
+  - name: stg_order_items
+    description: "Cleaned and deduplicated order line records from the CDC source."
+    columns:
+      - name: order_item_id
+        description: "Unique order line identifier after CDC deduplication."
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        tests:
+          - not_null
+      - name: sale_price
+        tests:
+          - not_null
+      - name: created_at
+        description: "Item creation timestamp — required for incremental correctness."
+        tests:
+          - not_null
+
+  - name: stg_products
+    description: "Cleaned product master data with CDC metadata preserved."
+    columns:
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+      - name: cost
+        description: "Product cost — must be non-null and non-negative."
+        tests:
+          - not_null
+      - name: retail_price
+        description: "Product retail price — must be non-null and non-negative."
+        tests:
+          - not_null
+      - name: product_name
+        tests:
+          - not_null
+      - name: category
+        tests:
+          - not_null
+
+  - name: stg_users
+    description: "Cleaned user master data."
+    columns:
+      - name: user_id
+        tests:
+          - unique
+          - not_null
+      - name: email
+        description: "User email address."
+        tests:
+          - not_null
+      - name: gender
+        description: "User gender."
+        tests:
+          - not_null
+      - name: country
+        description: "User country of residence."
+        tests:
+          - not_null
+
+  - name: stg_distribution_centers
+    description: "Cleaned distribution center master data."
+    columns:
+      - name: distribution_center_id
+        tests:
+          - unique
+          - not_null
+      - name: distribution_center_name
+        tests:
+          - not_null
+
+  - name: stg_inventory_items
+    description: "Cleaned inventory item lifecycle records."
+    columns:
+      - name: inventory_item_id
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        tests:
+          - not_null
+      - name: created_at
+        description: "Item entry timestamp — required for incremental correctness."
+        tests:
+          - not_null
+
+  - name: stg_events
+    description: "Cleaned and deduplicated digital events from the CDC stream."
+    columns:
+      - name: event_id
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        tests:
+          - not_null
+      - name: event_type
+        description: "Type of digital event (purchase, page, cart, etc.)."
+        tests:
+          - not_null
+      - name: created_at
+        description: "Event timestamp — required for incremental correctness."
+        tests:
+          - not_null

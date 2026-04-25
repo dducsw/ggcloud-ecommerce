@@ -1,0 +1,234 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Calendar dimension with a fixed configurable date range for consistent fact relationships."
+    columns:
+      - name: date_key
+        tests:
+          - unique
+          - not_null
+      - name: full_date
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_distribution_centers
+    description: "Distribution center dimension with a stable surrogate key and unknown member."
+    columns:
+      - name: dc_key
+        tests:
+          - unique
+          - not_null
+      - name: distribution_center_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_products
+    description: "Product dimension containing descriptive product attributes."
+    columns:
+      - name: product_key
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+      - name: distribution_center_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_distribution_centers')
+                field: distribution_center_id
+
+  - name: dim_users
+    description: "User dimension containing stable descriptive customer attributes only."
+    columns:
+      - name: user_key
+        tests:
+          - unique
+          - not_null
+      - name: user_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fact_orders
+    description: "Order-level fact table with revenue, margin, and fulfillment metrics."
+    columns:
+      - name: order_id
+        tests:
+          - unique
+          - not_null
+      - name: user_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_users')
+                field: user_key
+      - name: created_date_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: shipped_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: delivered_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: returned_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+  - name: fact_order_items
+    description: "Order line fact table at one row per order item."
+    columns:
+      - name: order_item_id
+        tests:
+          - unique
+          - not_null
+      - name: user_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_users')
+                field: user_key
+      - name: product_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_key
+      - name: dc_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_distribution_centers')
+                field: dc_key
+      - name: created_date_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: shipped_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: delivered_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: returned_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+  - name: fact_events
+    description: "Digital event fact table capturing user activity by event."
+    columns:
+      - name: event_id
+        tests:
+          - unique
+          - not_null
+      - name: user_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_users')
+                field: user_key
+      - name: created_date_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+  - name: fact_inventory
+    description: "Inventory lifecycle fact table at one row per inventory item."
+    columns:
+      - name: inventory_item_id
+        tests:
+          - unique
+          - not_null
+      - name: product_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_key
+      - name: dc_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_distribution_centers')
+                field: dc_key
+      - name: created_date_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: sold_date_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+  - name: agg_dashboard_daily
+    description: "Daily aggregated KPIs for dashboard consumption."
+    columns:
+      - name: date
+        tests:
+          - unique
+          - not_null
+      - name: revenue
+        tests:
+          - not_null
+      - name: purchase_cvr
+        tests:
+          - not_null
+
+  - name: agg_user_stats
+    description: "User-level aggregate metrics derived from fact_orders."
+    columns:
+      - name: user_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Potential', 'New', 'Returning']

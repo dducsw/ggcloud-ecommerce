@@ -2,6 +2,7 @@
 
 with valid_products as (
     select
+        to_hex(md5(concat('c0:', coalesce(cast(product_id as string), '__null__')))) as product_key,
         product_id,
         product_name,
         category,
@@ -12,11 +13,12 @@ with valid_products as (
         cost,
         retail_price - cost as margin_value,
         distribution_center_id,
-        created_at
+        source_updated_at
     from `cloud-data-project-492514`.`thelook_staging`.`stg_products`
 )
 
 select
+    product_key,
     product_id,
     product_name,
     category,
@@ -27,12 +29,14 @@ select
     cost,
     margin_value,
     distribution_center_id,
-    created_at
+    source_updated_at,
+    current_timestamp() as dwh_updated_at
 from valid_products
 
 union all
 
 select
+    to_hex(md5(concat('c0:', coalesce(cast(-1 as string), '__null__')))) as product_key,
     -1 as product_id,
     'Unknown Product' as product_name,
     'Unknown' as category,
@@ -43,7 +47,8 @@ select
     0 as cost,
     0 as margin_value,
     -1 as distribution_center_id,
-    timestamp('1970-01-01') as created_at
+    timestamp('1970-01-01') as source_updated_at,
+    current_timestamp() as dwh_updated_at
 from (select 1) as seed
 where not exists (
     select 1
