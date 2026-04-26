@@ -12,6 +12,7 @@ class DataProvider:
         self.project_id = os.getenv("GCP_PROJECT_ID")
         self.dataset = os.getenv("DWH_DATASET_ID") or os.getenv("GOLD_DATASET_ID", "thelook_datawarehouse")
         self.clickstream_dataset = os.getenv("CLICKSTREAM_DATASET_ID", "thelook_clickstream")
+        self.realtime_ttl = int(os.getenv("REALTIME_TTL", "60"))
         if not self.project_id:
             st.error("BigQuery project is not configured. Set GCP_PROJECT_ID.")
             st.stop()
@@ -251,7 +252,7 @@ class DataProvider:
         return self.run_query(q, self._date_params(ds, de))
 
     # --- 04 Realtime Clickstream (Merged) ---
-    @st.cache_data(ttl=900, show_spinner=False)
+    @st.cache_data(ttl=60, show_spinner=False)
     def get_traffic_sources(_self, start_date: str, end_date: str) -> list[str]:
         query = f"""
         SELECT DISTINCT traffic_source
@@ -432,6 +433,272 @@ class DataProvider:
           {traffic_filter}
         GROUP BY window_start
         ORDER BY window_start
+        """
+        return self.run_query(query)
+
+    def get_event_type_windows(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          TIMESTAMP(window_start) AS window_start,
+          COALESCE(event_type, 'Unknown') AS event_type,
+          SUM(total_events) AS total_events
+        FROM {self.table_ref('v_events_5m_latest')}
+        WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        GROUP BY window_start, event_type
+        ORDER BY window_start, event_type
+        """
+        return self.run_query(query)
+
+    def get_source_event_flow(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          COALESCE(traffic_source, 'Unknown') AS traffic_source,
+          COALESCE(event_type, 'Unknown') AS event_type,
+          COUNT(*) AS total_events
+        FROM {self.table_ref('v_events_raw_dedup')}
+        WHERE event_date BETWEEN DATE(TIMESTAMP('{start_date}')) AND DATE(TIMESTAMP('{end_date}'))
+          AND event_timestamp >= TIMESTAMP('{start_date}')
+          AND event_timestamp <= TIMESTAMP('{end_date}')
+          {traffic_filter}
+        GROUP BY traffic_source, event_type
+        HAVING total_events > 0
+        ORDER BY total_events DESC
+        LIMIT 40
+        """
+        return self.run_query(query)
+
+    def get_ingestion_freshness(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> dict:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        WITH raw AS (
+          SELECT
+            COUNT(*) AS dedup_events,
+            MAX(event_timestamp) AS latest_event_timestamp,
+            MAX(ingested_at) AS latest_ingested_at,
+            MAX(processing_time) AS latest_processing_time,
+            AVG(event_lag_seconds) AS avg_event_lag_seconds,
+            APPROX_QUANTILES(event_lag_seconds, 100)[OFFSET(95)] AS p95_event_lag_seconds
+          FROM {self.table_ref('v_events_raw_dedup')}
+          WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+            {traffic_filter}
+        ),
+        windows AS (
+          SELECT
+            MAX(window_start) AS latest_window_start,
+            MAX(version_emitted_at) AS latest_window_emitted_at,
+            COUNT(DISTINCT window_start) AS emitted_windows,
+            SUM(total_events) AS window_events
+          FROM {self.table_ref('v_events_5m_latest')}
+          WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+            {traffic_filter}
+        )
+        SELECT
+          raw.*,
+          windows.latest_window_start,
+          windows.latest_window_emitted_at,
+          windows.emitted_windows,
+          windows.window_events,
+          TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), latest_processing_time, SECOND) AS processing_freshness_seconds,
+          TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), latest_window_emitted_at, SECOND) AS aggregate_freshness_seconds
+        FROM raw, windows
+        """
+        df = self.run_query(query)
+        return df.iloc[0].to_dict() if not df.empty else {}
+
+    def get_throughput_by_window(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          TIMESTAMP(window_start) AS window_start,
+          SUM(total_events) AS total_events,
+          SUM(unique_sessions) AS unique_sessions,
+          SUM(unique_users) AS unique_users,
+          AVG(avg_event_lag_seconds) AS avg_event_lag_seconds,
+          SAFE_DIVIDE(SUM(total_events), 300) AS events_per_second,
+          MAX(version_emitted_at) AS version_emitted_at
+        FROM {self.table_ref('v_events_5m_latest')}
+        WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        GROUP BY window_start
+        ORDER BY window_start
+        """
+        return self.run_query(query)
+
+    def get_event_quality_summary(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> dict:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        WITH raw AS (
+          SELECT
+            COUNT(*) AS raw_rows,
+            COUNT(DISTINCT event_id) AS distinct_event_ids,
+            COUNTIF(session_id IS NULL OR TRIM(session_id) = '') AS missing_session_id,
+            COUNTIF(user_id IS NULL) AS missing_user_id,
+            COUNTIF(event_type IS NULL OR TRIM(event_type) = '') AS missing_event_type,
+            COUNTIF(event_timestamp IS NULL) AS missing_event_timestamp,
+            COUNTIF(event_lag_seconds < 0) AS negative_lag_events
+          FROM {self.table_ref('events_raw')}
+          WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+            {traffic_filter}
+        ),
+        dedup AS (
+          SELECT COUNT(*) AS dedup_rows
+          FROM {self.table_ref('v_events_raw_dedup')}
+          WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+            {traffic_filter}
+        ),
+        deadletter AS (
+          SELECT COUNT(*) AS deadletter_rows
+          FROM {self.table_ref('events_deadletter')}
+          WHERE DATE(failed_at) BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+        )
+        SELECT
+          raw.*,
+          dedup.dedup_rows,
+          deadletter.deadletter_rows,
+          raw.raw_rows - dedup.dedup_rows AS duplicate_rows_removed,
+          SAFE_DIVIDE(raw.raw_rows - dedup.dedup_rows, NULLIF(raw.raw_rows, 0)) AS duplicate_rate,
+          SAFE_DIVIDE(deadletter.deadletter_rows, NULLIF(raw.raw_rows + deadletter.deadletter_rows, 0)) AS reject_rate
+        FROM raw, dedup, deadletter
+        """
+        df = self.run_query(query)
+        return df.iloc[0].to_dict() if not df.empty else {}
+
+    def get_quality_by_event_type(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          COALESCE(event_type, 'Unknown') AS event_type,
+          COUNT(*) AS total_events,
+          COUNTIF(session_id IS NULL OR TRIM(session_id) = '') AS missing_session_id,
+          COUNTIF(user_id IS NULL) AS missing_user_id,
+          AVG(event_lag_seconds) AS avg_event_lag_seconds,
+          APPROX_QUANTILES(event_lag_seconds, 100)[OFFSET(95)] AS p95_event_lag_seconds
+        FROM {self.table_ref('v_events_raw_dedup')}
+        WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        GROUP BY event_type
+        ORDER BY total_events DESC
+        """
+        return self.run_query(query)
+
+    def get_source_browser_matrix(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          COALESCE(traffic_source, 'Unknown') AS traffic_source,
+          COALESCE(browser, 'Unknown') AS browser,
+          SUM(total_events) AS total_events,
+          SUM(unique_sessions) AS unique_sessions,
+          AVG(avg_event_lag_seconds) AS avg_event_lag_seconds
+        FROM {self.table_ref('v_events_5m_latest')}
+        WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        GROUP BY traffic_source, browser
+        ORDER BY total_events DESC
+        LIMIT 25
+        """
+        return self.run_query(query)
+
+    def get_session_pipeline_health(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> dict:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        WITH sessions AS (
+          SELECT
+            COUNT(*) AS latest_sessions,
+            COUNTIF(session_id IS NULL OR TRIM(session_id) = '') AS missing_session_id,
+            COUNTIF(session_duration_seconds < 0) AS negative_duration_sessions,
+            COUNTIF(event_count = 0) AS zero_event_sessions,
+            AVG(event_count) AS avg_events_per_session,
+            APPROX_QUANTILES(event_count, 100)[OFFSET(95)] AS p95_events_per_session,
+            AVG(session_duration_seconds) AS avg_session_seconds,
+            APPROX_QUANTILES(session_duration_seconds, 100)[OFFSET(95)] AS p95_session_seconds,
+            MAX(session_end) AS latest_session_end,
+            MAX(version_emitted_at) AS latest_version_emitted_at,
+            MAX(processed_at) AS latest_processed_at
+          FROM {self.table_ref('v_session_metrics_latest')}
+          WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+            {traffic_filter}
+        ),
+        versions AS (
+          SELECT
+            COUNT(*) AS session_metric_versions,
+            COUNT(DISTINCT session_id) AS distinct_sessions,
+            COUNT(*) - COUNT(DISTINCT session_id) AS superseded_versions
+          FROM {self.table_ref('session_metrics')}
+          WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+            {traffic_filter}
+        )
+        SELECT
+          sessions.*,
+          versions.session_metric_versions,
+          versions.distinct_sessions,
+          versions.superseded_versions,
+          SAFE_DIVIDE(versions.superseded_versions, NULLIF(versions.session_metric_versions, 0)) AS superseded_version_rate,
+          TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), sessions.latest_processed_at, SECOND) AS session_freshness_seconds
+        FROM sessions, versions
+        """
+        df = self.run_query(query)
+        return df.iloc[0].to_dict() if not df.empty else {}
+
+    def get_sessionization_timeseries(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          TIMESTAMP_TRUNC(session_start, HOUR) AS session_hour,
+          COUNT(*) AS sessions,
+          SUM(event_count) AS events_in_sessions,
+          AVG(event_count) AS avg_events_per_session,
+          AVG(session_duration_seconds) AS avg_session_seconds,
+          MAX(version_emitted_at) AS latest_version_emitted_at
+        FROM {self.table_ref('v_session_metrics_latest')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        GROUP BY session_hour
+        ORDER BY session_hour
+        """
+        return self.run_query(query)
+
+    def get_session_anomaly_buckets(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT 'zero_event_sessions' AS check_name, COUNTIF(event_count = 0) AS sessions
+        FROM {self.table_ref('v_session_metrics_latest')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        UNION ALL
+        SELECT 'single_event_sessions' AS check_name, COUNTIF(event_count = 1) AS sessions
+        FROM {self.table_ref('v_session_metrics_latest')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        UNION ALL
+        SELECT 'negative_duration_sessions' AS check_name, COUNTIF(session_duration_seconds < 0) AS sessions
+        FROM {self.table_ref('v_session_metrics_latest')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        UNION ALL
+        SELECT 'long_sessions_over_30m' AS check_name, COUNTIF(session_duration_seconds > 1800) AS sessions
+        FROM {self.table_ref('v_session_metrics_latest')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        """
+        return self.run_query(query)
+
+    def get_session_versions_by_hour(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          TIMESTAMP_TRUNC(version_emitted_at, HOUR) AS emitted_hour,
+          COUNT(*) AS emitted_versions,
+          COUNT(DISTINCT session_id) AS distinct_sessions,
+          COUNT(*) - COUNT(DISTINCT session_id) AS superseded_versions
+        FROM {self.table_ref('session_metrics')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          {traffic_filter}
+        GROUP BY emitted_hour
+        ORDER BY emitted_hour
         """
         return self.run_query(query)
 

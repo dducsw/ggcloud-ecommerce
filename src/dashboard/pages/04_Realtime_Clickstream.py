@@ -1,9 +1,26 @@
+import concurrent.futures
+import datetime as dt
+
 import altair as alt
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from utils.data_provider import data_provider
 from utils.theme import apply_theme
+
+
+def fmt_int(value) -> str:
+    return f"{int(value or 0):,}"
+
+
+def fmt_seconds(value) -> str:
+    if value is None or pd.isna(value):
+        return "n/a"
+    value = float(value)
+    if value < 60:
+        return f"{value:.1f}s"
+    return f"{value / 60:.1f}m"
 
 
 def render_kpi_card(column, label: str, value: str, subtitle: str) -> None:
@@ -19,28 +36,152 @@ def render_kpi_card(column, label: str, value: str, subtitle: str) -> None:
     )
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_overview_data(start_date: str, end_date: str, traffic_filter: tuple[str, ...]) -> dict:
-    traffic_sources = list(traffic_filter)
-    return {
-        "metrics": data_provider.get_overview_metrics(start_date, end_date, traffic_sources),
-        "daily_df": data_provider.get_daily_events_and_purchases(start_date, end_date, traffic_sources),
-        "channel_df": data_provider.get_channel_distribution(start_date, end_date, traffic_sources),
-        "realtime_df": data_provider.get_realtime_windows(start_date, end_date, traffic_sources),
-        "event_type_df": data_provider.get_event_type_breakdown(start_date, end_date, traffic_sources),
-        "deadletter_metrics": data_provider.get_deadletter_monitor(start_date, end_date),
-        "deadletter_ts_df": data_provider.get_deadletter_timeseries(start_date, end_date),
-        "deadletter_samples": data_provider.get_deadletter_samples(start_date, end_date),
-        "pipeline_health": data_provider.get_pipeline_health(start_date, end_date, traffic_sources),
-        "event_lag_df": data_provider.get_event_lag_timeseries(start_date, end_date, traffic_sources),
+def select_time_range(default_start: str, default_end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    presets = {
+        "Last 5 minutes": dt.timedelta(minutes=5),
+        "Last 15 minutes": dt.timedelta(minutes=15),
+        "Last 30 minutes": dt.timedelta(minutes=30),
+        "Last 1 hour": dt.timedelta(hours=1),
+        "Last 6 hours": dt.timedelta(hours=6),
+        "Last 1 day": dt.timedelta(days=1),
+        "Custom range": None,
     }
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("Time range")
+        selected = st.selectbox("Window", list(presets), index=5)
+
+        if selected == "Custom range":
+            start_date = st.date_input("Start date", value=pd.to_datetime(default_start).date(), key="rt_start_date")
+            start_time = st.time_input("Start time", value=dt.time(0, 0), key="rt_start_time")
+            end_date = st.date_input("End date", value=pd.to_datetime(default_end).date(), key="rt_end_date")
+            end_time = st.time_input("End time", value=dt.time(23, 59), key="rt_end_time")
+            start_ts = pd.Timestamp(dt.datetime.combine(start_date, start_time))
+            end_ts = pd.Timestamp(dt.datetime.combine(end_date, end_time))
+        else:
+            end_ts = pd.Timestamp(dt.datetime.combine(pd.to_datetime(default_end).date(), dt.time(23, 59, 59)))
+            start_ts = end_ts - presets[selected]
+
+    if start_ts >= end_ts:
+        st.warning("Start time must be before end time. Falling back to the last 1 day.")
+        end_ts = pd.Timestamp(dt.datetime.combine(pd.to_datetime(default_end).date(), dt.time(23, 59, 59)))
+        start_ts = end_ts - dt.timedelta(days=1)
+    return start_ts, end_ts
+
+
+def filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+    if df.empty or column not in df.columns:
+        return df
+    filtered = df.copy()
+    filtered[column] = pd.to_datetime(filtered[column]).dt.tz_localize(None)
+    return filtered[(filtered[column] >= start_ts) & (filtered[column] <= end_ts)]
+
+
+def build_source_event_sankey(flow_df: pd.DataFrame) -> go.Figure:
+    top_flow = flow_df.copy().sort_values("total_events", ascending=False).head(28)
+    target_totals = top_flow.groupby("event_type", as_index=False)["total_events"].sum()
+    target_totals = target_totals.sort_values("total_events", ascending=False)
+    target_labels = {
+        row["event_type"]: f"{row['event_type']}  {int(row['total_events']):,}"
+        for _, row in target_totals.iterrows()
+    }
+
+    sources = [f"source::{value}" for value in top_flow["traffic_source"].astype(str).tolist()]
+    targets = [f"target::{value}" for value in top_flow["event_type"].map(target_labels).astype(str).tolist()]
+    node_ids = list(dict.fromkeys(sources + targets))
+    node_index = {node_id: idx for idx, node_id in enumerate(node_ids)}
+    source_idx = [node_index[node_id] for node_id in sources]
+    target_idx = [node_index[node_id] for node_id in targets]
+    palette = ["#ff9f1c", "#66c7c7", "#a6d854", "#006bd6", "#c65db5", "#8b65c9"]
+    event_color = {
+        label: palette[idx % len(palette)]
+        for idx, label in enumerate(target_labels.values())
+    }
+    source_color = "rgba(180, 198, 220, 0.30)"
+    source_ids = set(sources)
+    target_id_to_label = {f"target::{label}": label for label in target_labels.values()}
+    node_colors = [
+        source_color if node_id in source_ids else event_color.get(target_id_to_label.get(node_id, ""), "#66c7c7")
+        for node_id in node_ids
+    ]
+
+    def hex_to_rgba(hex_color: str, alpha: float = 0.42) -> str:
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return f"rgba({r}, {g}, {b}, {alpha})"
+
+    link_colors = [hex_to_rgba(event_color.get(target_id_to_label.get(target, ""), "#66c7c7")) for target in targets]
+    display_labels = [target_id_to_label.get(node_id, " ") for node_id in node_ids]
+
+    fig = go.Figure(
+        data=[
+            go.Sankey(
+                arrangement="fixed",
+                node={
+                    "pad": 10,
+                    "thickness": 8,
+                    "line": {"color": "rgba(255,255,255,0)", "width": 0},
+                    "label": display_labels,
+                    "color": node_colors,
+                    "x": [0.06 if node_id in source_ids else 0.92 for node_id in node_ids],
+                    "y": [
+                        (idx + 1) / (len(node_ids) + 1)
+                        if node_id in source_ids
+                        else (list(target_labels.values()).index(target_id_to_label[node_id]) + 1) / (len(target_labels) + 1)
+                        for idx, node_id in enumerate(node_ids)
+                    ],
+                },
+                link={
+                    "source": source_idx,
+                    "target": target_idx,
+                    "value": top_flow["total_events"].tolist(),
+                    "color": link_colors,
+                },
+            )
+        ]
+    )
+    fig.update_layout(
+        height=380,
+        margin={"l": 4, "r": 16, "t": 4, "b": 4},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#dbeafe", "size": 13},
+    )
+    return fig
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_dashboard_data(start_date: str, end_date: str, range_start_value: str, range_end_value: str, traffic_filter: tuple[str, ...]) -> dict:
+    traffic_sources = list(traffic_filter)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {
+            "business": executor.submit(data_provider.get_overview_metrics, start_date, end_date, traffic_sources),
+            "event_mix": executor.submit(data_provider.get_event_type_breakdown, start_date, end_date, traffic_sources),
+            "event_type_windows": executor.submit(data_provider.get_event_type_windows, start_date, end_date, traffic_sources),
+            "source_event_flow": executor.submit(data_provider.get_source_event_flow, range_start_value, range_end_value, traffic_sources),
+            "business_windows": executor.submit(data_provider.get_realtime_windows, start_date, end_date, traffic_sources),
+            "freshness": executor.submit(data_provider.get_ingestion_freshness, start_date, end_date, traffic_sources),
+            "quality": executor.submit(data_provider.get_event_quality_summary, start_date, end_date, traffic_sources),
+            "throughput": executor.submit(data_provider.get_throughput_by_window, start_date, end_date, traffic_sources),
+        }
+        return {key: future.result() for key, future in futures.items()}
 
 
 apply_theme()
-st.title("🛰️ Realtime Clickstream")
+st.title("Realtime Clickstream")
 
-active_start = st.session_state.get('start_date')
-active_end = st.session_state.get('end_date')
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("Realtime controls")
+    auto_refresh = st.toggle("Auto-refresh every 60s", value=True)
+    if st.button("Refresh now"):
+        st.cache_data.clear()
+        st.rerun()
+
+active_start = st.session_state.get("start_date")
+active_end = st.session_state.get("end_date")
 
 if not active_start or not active_end:
     active_start, active_end = data_provider.get_default_date_range(window_days=1)
@@ -48,199 +189,161 @@ if not active_start or not active_end:
 
 start_date = str(active_start)
 end_date = str(active_end)
-traffic_filter = []
+range_start, range_end = select_time_range(start_date, end_date)
+query_start_date = str(range_start.date())
+query_end_date = str(range_end.date())
+traffic_filter: tuple[str, ...] = tuple()
 
-overview_data = load_overview_data(start_date, end_date, traffic_filter)
-metrics = overview_data["metrics"]
-daily_df = overview_data["daily_df"]
-channel_df = overview_data["channel_df"]
-realtime_df = overview_data["realtime_df"]
-event_type_df = overview_data["event_type_df"]
-deadletter_metrics = overview_data["deadletter_metrics"]
-deadletter_ts_df = overview_data["deadletter_ts_df"]
-deadletter_samples = overview_data["deadletter_samples"]
-pipeline_health = overview_data["pipeline_health"]
-event_lag_df = overview_data["event_lag_df"]
 
-kpi_cols = st.columns(5)
-render_kpi_card(kpi_cols[0], "Total events", f"{int(metrics.get('total_events') or 0):,}", "Deduplicated events in range")
-render_kpi_card(kpi_cols[1], "Sessions", f"{int(metrics.get('total_sessions') or 0):,}", "Distinct sessions")
-render_kpi_card(kpi_cols[2], "Users", f"{int(metrics.get('total_users') or 0):,}", "Known users only")
-render_kpi_card(kpi_cols[3], "Purchases", f"{int(metrics.get('purchase_events') or 0):,}", "Purchase events")
-render_kpi_card(kpi_cols[4], "CVR", f"{float(metrics.get('conversion_rate') or 0):.2%}", "Purchases per session")
+@st.fragment(run_every=60 if auto_refresh else None)
+def render_dashboard():
+    data = load_dashboard_data(
+        query_start_date,
+        query_end_date,
+        range_start.isoformat(sep=" "),
+        range_end.isoformat(sep=" "),
+        traffic_filter,
+    )
+    business = data["business"]
+    event_type_windows = filter_by_time(data["event_type_windows"], "window_start", range_start, range_end)
+    source_event_flow = data["source_event_flow"]
+    business_windows = filter_by_time(data["business_windows"], "window_start", range_start, range_end)
+    freshness = data["freshness"]
+    quality = data["quality"]
+    throughput = filter_by_time(data["throughput"], "window_start", range_start, range_end)
 
-top_left, top_right = st.columns((1.7, 1))
-with top_left:
-    st.subheader("Events and purchases")
-    if daily_df.empty:
-        st.info("No events for the selected filters.")
-    else:
-        time_field = "event_date:T"
-        if len(daily_df.index) == 1 and not realtime_df.empty:
-            chart_df = realtime_df.copy()
-            chart_df["purchase_events"] = chart_df["purchase_events"].fillna(0)
-            time_field = "window_start:T"
-        else:
-            chart_df = daily_df.copy()
-
-        base = alt.Chart(chart_df).encode(x=alt.X(time_field, title=None))
-        events_line = base.mark_line(color="#315f8c", strokeWidth=2.4).encode(y=alt.Y("total_events:Q", title="Events"))
-        purchase_line = base.mark_line(color="#d36c42", strokeWidth=2.2).encode(
-            y=alt.Y("purchase_events:Q", title="Purchases")
+    if not event_type_windows.empty:
+        event_mix = (
+            event_type_windows.groupby("event_type", as_index=False)["total_events"]
+            .sum()
+            .sort_values("total_events", ascending=False)
         )
-        chart = alt.layer(events_line, purchase_line).resolve_scale(y="independent").properties(height=320)
-        st.altair_chart(chart, width="stretch")
+        business["total_events"] = event_mix["total_events"].sum()
+    else:
+        event_mix = data["event_mix"]
 
-with top_right:
-    st.subheader("Dead-letter monitor")
-    deadletter_count = int(deadletter_metrics.get("deadletter_count") or 0)
-    latest_failure = deadletter_metrics.get("latest_failure_at")
-    if deadletter_count > 0:
-        st.warning(f"{deadletter_count:,} invalid records were routed to dead-letter in the selected range.")
-    else:
-        st.success("No dead-letter records detected in the selected range.")
-    stat_cols = st.columns(2)
-    stat_cols[0].metric("Dead-letter rows", f"{deadletter_count:,}")
-    stat_cols[1].metric("Today", f"{int(deadletter_metrics.get('deadletter_today') or 0):,}")
-    st.caption(f"Latest failure: {latest_failure if latest_failure else 'None'}")
-    if not deadletter_samples.empty:
-        preview = deadletter_samples.copy()
-        preview["raw_message"] = preview["raw_message"].astype(str).str.slice(0, 120)
-        st.dataframe(preview, width="stretch", hide_index=True)
-    else:
-        st.caption("No recent dead-letter samples.")
+    business_cols = st.columns(4)
+    render_kpi_card(business_cols[0], "Events", fmt_int(business.get("total_events")), "Deduplicated clickstream")
+    render_kpi_card(business_cols[1], "Sessions", fmt_int(business.get("total_sessions")), "Distinct sessions")
+    render_kpi_card(business_cols[2], "Users", fmt_int(business.get("total_users")), "Known users")
+    render_kpi_card(business_cols[3], "Purchase/session", f"{float(business.get('conversion_rate') or 0):.2%}", "Light business signal")
 
-mid_left, mid_right = st.columns((1.1, 1))
-with mid_left:
-    st.subheader("Channel distribution")
-    if channel_df.empty:
-        st.info("No channel data available.")
+    st.subheader("Business: traffic by event type")
+    if event_type_windows.empty:
+        st.info("No event type window data available.")
     else:
-        channel_chart = (
-            alt.Chart(channel_df)
-            .mark_bar(color="#4d87b9")
+        traffic_chart = (
+            alt.Chart(event_type_windows)
+            .mark_bar()
             .encode(
-                x=alt.X("total_events:Q", title="Events"),
-                y=alt.Y("traffic_source:N", sort="-x", title=None),
-                tooltip=[
-                    alt.Tooltip("traffic_source:N", title="Channel"),
-                    alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
-                    alt.Tooltip("sessions:Q", title="Sessions", format=",.0f"),
-                    alt.Tooltip("purchases:Q", title="Purchases", format=",.0f"),
-                ],
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(channel_chart, width="stretch")
-
-with mid_right:
-    st.subheader("Event type breakdown")
-    if event_type_df.empty:
-        st.info("No event type data available.")
-    else:
-        donut = (
-            alt.Chart(event_type_df)
-            .mark_arc(innerRadius=70, outerRadius=120)
-            .encode(
-                theta=alt.Theta("total_events:Q"),
+                x=alt.X("window_start:T", title="Window"),
+                y=alt.Y("total_events:Q", stack="zero", title="Events"),
                 color=alt.Color(
                     "event_type:N",
-                    scale=alt.Scale(
-                        range=["#315f8c", "#4d87b9", "#7da8cf", "#d36c42", "#9ca9b8", "#5f7288"]
-                    ),
-                    legend=alt.Legend(title="Event type", orient="bottom"),
+                    title="Event type",
+                    scale=alt.Scale(range=["#d47465", "#66bcc7", "#8ccf68", "#9a68cc", "#cf65b5", "#5f7288"]),
                 ),
                 tooltip=[
-                    alt.Tooltip("event_type:N", title="Event type"),
+                    alt.Tooltip("window_start:T", title="Window"),
+                    alt.Tooltip("event_type:N", title="Event"),
                     alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
                 ],
             )
             .properties(height=300)
         )
-        st.altair_chart(donut, width="stretch")
+        st.altair_chart(traffic_chart, width="stretch")
 
-monitor_left, monitor_mid, monitor_right = st.columns(3)
-monitor_left.metric("Average event lag", f"{float(pipeline_health.get('avg_event_lag_seconds') or 0):.1f} s")
-monitor_mid.metric("Dead-letter rate", f"{float(pipeline_health.get('deadletter_rate') or 0):.2%}")
-monitor_right.metric("Latest realtime window", str(pipeline_health.get("latest_window_start") or "None"))
+    business_left, business_right = st.columns(2)
+    with business_left:
+        st.subheader("Business: event share")
+        if event_mix.empty:
+            st.info("No event data available.")
+        else:
+            chart = (
+                alt.Chart(event_mix)
+                .mark_arc(innerRadius=65, outerRadius=115)
+                .encode(
+                    theta=alt.Theta("total_events:Q"),
+                    color=alt.Color(
+                        "event_type:N",
+                        title="Event type",
+                        scale=alt.Scale(range=["#d47465", "#66bcc7", "#8ccf68", "#9a68cc", "#cf65b5", "#5f7288"]),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("event_type:N", title="Event"),
+                        alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
+                    ],
+                )
+                .properties(height=280)
+            )
+            st.altair_chart(chart, width="stretch")
 
-bottom_left, bottom_right = st.columns((1.15, 1))
-with bottom_left:
-    st.subheader("Realtime activity in 5-minute windows")
-    if realtime_df.empty:
-        st.info("No realtime aggregate windows available for the selected range.")
+    with business_right:
+        st.subheader("Business: purchases over time")
+        if business_windows.empty:
+            st.info("No realtime windows available.")
+        else:
+            chart = (
+                alt.Chart(business_windows)
+                .mark_line(color="#d36c42", strokeWidth=2.3)
+                .encode(
+                    x=alt.X("window_start:T", title=None),
+                    y=alt.Y("purchase_events:Q", title="Purchases"),
+                    tooltip=[
+                        alt.Tooltip("window_start:T", title="Window"),
+                        alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
+                        alt.Tooltip("purchase_events:Q", title="Purchases", format=",.0f"),
+                    ],
+                )
+                .properties(height=280)
+            )
+            st.altair_chart(chart, width="stretch")
+
+    st.subheader("Business: traffic source to event flow")
+    if source_event_flow.empty:
+        st.info("No source/event flow data available.")
     else:
-        realtime_chart = (
-            alt.Chart(realtime_df)
-            .mark_area(color="#8db5d9", line={"color": "#315f8c", "strokeWidth": 1.6}, opacity=0.7)
-            .encode(
-                x=alt.X("window_start:T", title=None),
-                y=alt.Y("total_events:Q", title="Events"),
+        st.plotly_chart(build_source_event_sankey(source_event_flow), use_container_width=True)
+
+    ops_cols = st.columns(4)
+    render_kpi_card(ops_cols[0], "Processing freshness", fmt_seconds(freshness.get("processing_freshness_seconds")), "Latest processing_time")
+    render_kpi_card(ops_cols[1], "Aggregate freshness", fmt_seconds(freshness.get("aggregate_freshness_seconds")), "Latest 5m emit")
+    render_kpi_card(ops_cols[2], "P95 lag", fmt_seconds(freshness.get("p95_event_lag_seconds")), "Event to processing")
+    render_kpi_card(ops_cols[3], "Reject rate", f"{float(quality.get('reject_rate') or 0):.2%}", "Dead-letter ratio")
+
+    ops_left, ops_right = st.columns(2)
+    with ops_left:
+        st.subheader("Ops: throughput and lag")
+        if throughput.empty:
+            st.info("No throughput data available.")
+        else:
+            base = alt.Chart(throughput).encode(x=alt.X("window_start:T", title=None))
+            events = base.mark_area(color="#8db5d9", opacity=0.65, line={"color": "#315f8c"}).encode(
+                y=alt.Y("events_per_second:Q", title="Events/sec"),
                 tooltip=[
                     alt.Tooltip("window_start:T", title="Window"),
-                    alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
-                    alt.Tooltip("purchase_events:Q", title="Purchases", format=",.0f"),
+                    alt.Tooltip("events_per_second:Q", title="Events/sec", format=",.2f"),
                     alt.Tooltip("avg_event_lag_seconds:Q", title="Avg lag (s)", format=",.1f"),
                 ],
             )
-            .properties(height=300)
-        )
-        st.altair_chart(realtime_chart, width="stretch")
-
-with bottom_right:
-    st.subheader("Event lag over time")
-    if event_lag_df.empty:
-        st.info("No event lag data available.")
-    else:
-        lag_chart = (
-            alt.Chart(event_lag_df)
-            .mark_line(color="#5f7288", strokeWidth=2)
-            .encode(
-                x=alt.X("window_start:T", title=None),
-                y=alt.Y("avg_event_lag_seconds:Q", title="Lag (s)"),
-                tooltip=[
-                    alt.Tooltip("window_start:T", title="Window"),
-                    alt.Tooltip("avg_event_lag_seconds:Q", title="Avg lag (s)", format=",.1f"),
-                    alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
-                ],
+            lag = base.mark_line(color="#c96a50", strokeWidth=2).encode(
+                y=alt.Y("avg_event_lag_seconds:Q", title="Avg lag (s)")
             )
-            .properties(height=300)
-        )
-        st.altair_chart(lag_chart, width="stretch")
+            st.altair_chart(alt.layer(events, lag).resolve_scale(y="independent").properties(height=280), width="stretch")
 
-tech_left, tech_right = st.columns((1, 1))
-with tech_left:
-    st.subheader("Dead-letter by hour")
-    if deadletter_ts_df.empty:
-        st.info("No dead-letter activity in the selected range.")
-    else:
-        dl_chart = (
-            alt.Chart(deadletter_ts_df)
-            .mark_bar(color="#c96a50")
-            .encode(
-                x=alt.X("failed_hour:T", title=None),
-                y=alt.Y("deadletter_count:Q", title="Dead-letter rows"),
-                tooltip=[
-                    alt.Tooltip("failed_hour:T", title="Hour"),
-                    alt.Tooltip("deadletter_count:Q", title="Rows", format=",.0f"),
-                ],
-            )
-            .properties(height=260)
+    with ops_right:
+        st.subheader("Ops: quality checks")
+        quality_rows = pd.DataFrame(
+            [
+                {"Check": "Raw rows", "Value": fmt_int(quality.get("raw_rows"))},
+                {"Check": "Duplicate rows removed", "Value": fmt_int(quality.get("duplicate_rows_removed"))},
+                {"Check": "Missing session_id", "Value": fmt_int(quality.get("missing_session_id"))},
+                {"Check": "Missing user_id", "Value": fmt_int(quality.get("missing_user_id"))},
+                {"Check": "Negative lag events", "Value": fmt_int(quality.get("negative_lag_events"))},
+                {"Check": "Latest 5m window", "Value": str(freshness.get("latest_window_start") or "None")},
+            ]
         )
-        st.altair_chart(dl_chart, width="stretch")
+        st.dataframe(quality_rows, width="stretch", hide_index=True)
 
-with tech_right:
-    st.subheader("Pipeline health")
-    health_rows = pd.DataFrame(
-        [
-            {"Metric": "Raw events ingested", "Value": f"{int(pipeline_health.get('raw_events') or 0):,}"},
-            {"Metric": "Realtime events emitted", "Value": f"{int(pipeline_health.get('realtime_events') or 0):,}"},
-            {"Metric": "Realtime purchases emitted", "Value": f"{int(pipeline_health.get('realtime_purchases') or 0):,}"},
-            {"Metric": "Latest event timestamp", "Value": str(pipeline_health.get("latest_event_timestamp") or "None")},
-            {"Metric": "Latest processing time", "Value": str(pipeline_health.get("latest_processing_time") or "None")},
-            {"Metric": "Average session length", "Value": f"{float(metrics.get('avg_session_seconds') or 0) / 60:.1f} min"},
-            {"Metric": "Average events per session", "Value": f"{float(metrics.get('avg_events_per_session') or 0):.2f}"},
-            {"Metric": "Cart rate", "Value": f"{float(metrics.get('cart_rate') or 0):.2%}"},
-        ]
-    )
-    st.dataframe(health_rows, width="stretch", hide_index=True)
+
+render_dashboard()
