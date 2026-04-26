@@ -3,7 +3,8 @@ from apache_beam.io.gcp.bigquery import WriteToBigQuery
 
 
 def write_bq(collection, table: str, schema: dict, extra_parameters=None):
-    return collection | f"Write_{table}" >> WriteToBigQuery(
+    label = "Write_" + table.replace(":", "_").replace(".", "_")
+    return collection | label >> WriteToBigQuery(
         table=table,
         schema=schema,
         write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,

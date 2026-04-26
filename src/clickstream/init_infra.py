@@ -133,7 +133,7 @@ def create_bq_resources(project_id, dataset_id, location="asia-southeast1"):
         "v_session_metrics_latest": f"""
             CREATE OR REPLACE VIEW `{project_id}.{dataset_id}.v_session_metrics_latest` AS
             SELECT * FROM `{project_id}.{dataset_id}.session_metrics`
-            QUALIFY ROW_NUMBER() OVER (PARTITION BY session_record_id ORDER BY version_emitted_at DESC) = 1
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY version_emitted_at DESC) = 1
         """,
         "v_session_funnel": f"""
             CREATE OR REPLACE VIEW `{project_id}.{dataset_id}.v_session_funnel` AS
@@ -155,7 +155,7 @@ def create_bq_resources(project_id, dataset_id, location="asia-southeast1"):
             CREATE OR REPLACE VIEW `{project_id}.{dataset_id}.v_product_interest` AS
             SELECT
               event_date, product_id, product_name, product_category, product_department,
-              COUNTIF(event_type = 'product') AS product_views,
+              COUNTIF(page_type = 'product') AS product_views,
               COUNTIF(event_type = 'cart') AS add_to_cart_events,
               COUNTIF(event_type = 'purchase') AS purchase_events
             FROM `{project_id}.{dataset_id}.v_events_raw_dedup`
@@ -200,7 +200,7 @@ def create_pubsub_resources(project_id, topic_id, subscription_id):
         subscriber.get_subscription(request={"subscription": subscription_path})
         logging.info(f"Subscription {subscription_path} already exists.")
     except exceptions.NotFound:
-        subscriber.create_subscription(request={"name": subscription_path, "topic": topic_path, "ack_deadline_seconds": 20})
+        subscriber.create_subscription(request={"name": subscription_path, "topic": topic_path, "ack_deadline_seconds": 600})
         logging.info(f"Created subscription {subscription_path}")
 
 def main():

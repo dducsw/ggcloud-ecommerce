@@ -1,13 +1,16 @@
 import json
+import logging
 
 import apache_beam as beam
-from apache_beam.coders import BooleanCoder, StrUtf8Coder, VarIntCoder
+from apache_beam.coders import BooleanCoder
 from apache_beam.metrics import Metrics
 from apache_beam.transforms.userstate import ReadModifyWriteStateSpec, TimeDomain, TimerSpec, on_timer
 
 from src.clickstream.pipeline.utils import parse_iso8601, parse_uri, to_timestamp_string, utc_now
 
 PAGEVIEW_TYPES = {"home", "department", "category", "product"}
+VALID_EVENT_TYPES = {"home", "department", "category", "product", "cart", "purchase", "cancel", "return"}
+MAX_EVENTS_PER_SESSION = 5000
 
 
 class ParseValidateDoFn(beam.DoFn):
@@ -37,6 +40,10 @@ class ParseValidateDoFn(beam.DoFn):
             if missing:
                 raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
+            event_type = str(payload.get("event_type"))
+            if event_type not in VALID_EVENT_TYPES:
+                raise ValueError(f"Unknown event_type: {event_type}")
+
             event_ts = parse_iso8601(str(event_timestamp_raw))
             ingested_at = parse_iso8601(str(ingested_at_raw))
             row = {
@@ -51,7 +58,7 @@ class ParseValidateDoFn(beam.DoFn):
                 "browser": payload.get("browser"),
                 "traffic_source": payload.get("traffic_source"),
                 "uri": payload.get("uri"),
-                "event_type": payload.get("event_type"),
+                "event_type": event_type,
                 "event_timestamp": to_timestamp_string(event_ts),
                 "event_date": event_ts.date().isoformat(),
                 "ingested_at": to_timestamp_string(ingested_at),
@@ -126,48 +133,6 @@ class DeduplicateEventsDoFn(beam.DoFn):
         seen_state.clear()
 
 
-class TrackSessionActivityDoFn(beam.DoFn):
-    LAST_EVENT_TS = ReadModifyWriteStateSpec("last_event_ts", VarIntCoder())
-    LAST_EVENT_TYPE = ReadModifyWriteStateSpec("last_event_type", StrUtf8Coder())
-    STALE_TIMER = TimerSpec("stale", TimeDomain.WATERMARK)
-
-    def __init__(self, inactivity_gap_seconds: int):
-        self.inactivity_gap_seconds = inactivity_gap_seconds
-
-    def process(
-        self,
-        element,
-        timestamp=beam.DoFn.TimestampParam,
-        last_event_ts=beam.DoFn.StateParam(LAST_EVENT_TS),
-        last_event_type=beam.DoFn.StateParam(LAST_EVENT_TYPE),
-        stale_timer=beam.DoFn.TimerParam(STALE_TIMER),
-    ):
-        session_id, row = element
-        last_event_ts.write(int(timestamp.micros))
-        last_event_type.write(row.get("event_type") or "unknown")
-        stale_timer.set(timestamp + self.inactivity_gap_seconds)
-        yield (session_id, row)
-
-    @on_timer(STALE_TIMER)
-    def on_stale(
-        self,
-        key=beam.DoFn.KeyParam,
-        window=beam.DoFn.WindowParam,
-        last_event_ts=beam.DoFn.StateParam(LAST_EVENT_TS),
-        last_event_type=beam.DoFn.StateParam(LAST_EVENT_TYPE),
-    ):
-        if last_event_ts.read() is not None:
-            yield beam.pvalue.TaggedOutput(
-                "session_status",
-                {
-                    "session_id": key,
-                    "window_end": to_timestamp_string(window.end.to_utc_datetime()),
-                    "last_event_type": last_event_type.read() or "unknown",
-                    "is_abandoned_cart": (last_event_type.read() or "") == "cart",
-                },
-            )
-        last_event_ts.clear()
-        last_event_type.clear()
 
 
 def to_aggregate_key(row: dict):
@@ -183,6 +148,7 @@ def to_aggregate_key(row: dict):
 def create_aggregate_record(element, window=beam.DoFn.WindowParam):
     key, rows = element
     rows = list(rows)
+    now = utc_now()
     event_date, traffic_source, browser, event_type, page_type = key
     window_start = to_timestamp_string(window.start.to_utc_datetime())
     window_end = to_timestamp_string(window.end.to_utc_datetime())
@@ -215,16 +181,27 @@ def create_aggregate_record(element, window=beam.DoFn.WindowParam):
         "unique_users": len(user_ids),
         "purchase_events": purchase_events,
         "avg_event_lag_seconds": (sum(lags) / len(lags)) if lags else None,
-        "version_emitted_at": to_timestamp_string(utc_now()),
+        "version_emitted_at": to_timestamp_string(now),
     }
 
 
 def build_session_metric(element):
     session_id, rows = element
-    rows = sorted(list(rows), key=lambda row: row["event_timestamp"])
+    rows_list = list(rows)
+    if len(rows_list) > MAX_EVENTS_PER_SESSION:
+        logging.warning(
+            "Session %s has %d events, capping at %d",
+            session_id,
+            len(rows_list),
+            MAX_EVENTS_PER_SESSION,
+        )
+        rows_list = rows_list[:MAX_EVENTS_PER_SESSION]
+
+    rows = sorted(rows_list, key=lambda row: row["event_timestamp"])
     if not rows:
         return None
 
+    now = utc_now()
     start_ts = parse_iso8601(rows[0]["event_timestamp"])
     end_ts = parse_iso8601(rows[-1]["event_timestamp"])
     category_counts = {}
@@ -238,12 +215,7 @@ def build_session_metric(element):
     purchase_count = sum(1 for row in rows if row.get("event_type") == "purchase")
 
     return {
-        "session_record_id": "|".join(
-            [
-                session_id,
-                to_timestamp_string(start_ts),
-            ]
-        ),
+        "session_record_id": session_id,
         "session_id": session_id,
         "user_id": rows[0].get("user_id"),
         "traffic_source": rows[0].get("traffic_source"),
@@ -256,12 +228,12 @@ def build_session_metric(element):
         "product_view_count": sum(1 for row in rows if row.get("page_type") == "product"),
         "cart_count": cart_count,
         "purchase_count": purchase_count,
-        "saw_home": any(row.get("event_type") == "home" for row in rows),
-        "saw_product": any(row.get("event_type") == "product" for row in rows),
+        "saw_home": any(row.get("page_type") == "home" for row in rows),
+        "saw_product": any(row.get("page_type") == "product" for row in rows),
         "added_to_cart": cart_count > 0,
         "purchased": purchase_count > 0,
         "top_category": top_category,
         "session_date": start_ts.date().isoformat(),
-        "version_emitted_at": to_timestamp_string(utc_now()),
-        "processed_at": to_timestamp_string(utc_now()),
+        "version_emitted_at": to_timestamp_string(now),
+        "processed_at": to_timestamp_string(now),
     }

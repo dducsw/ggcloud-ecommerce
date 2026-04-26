@@ -23,8 +23,8 @@ class ClickstreamEventPublisher:
             return value.isoformat()
         return str(value)
 
-    def publish(self, event) -> None:
-        payload = {
+    def _build_payload(self, event) -> dict:
+        return {
             "event_id": int(event.id),
             "user_id": int(event.user_id) if event.user_id is not None else None,
             "sequence_number": int(event.sequence_number),
@@ -41,11 +41,19 @@ class ClickstreamEventPublisher:
             "ingested_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        future = self.publisher.publish(
+    def publish_async(self, event):
+        payload = self._build_payload(event)
+        return self.publisher.publish(
             self.topic_path,
             json.dumps(payload).encode("utf-8"),
             source="datagen",
             event_type=event.event_type,
         )
-        future.result(timeout=30)
 
+    def publish(self, event) -> None:
+        self.publish_async(event).result(timeout=30)
+
+    def publish_batch(self, events, timeout: int = 30) -> None:
+        futures = [self.publish_async(event) for event in events]
+        for future in futures:
+            future.result(timeout=timeout)

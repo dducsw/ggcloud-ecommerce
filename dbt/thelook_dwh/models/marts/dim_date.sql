@@ -31,9 +31,6 @@ from calendar
 
 union all
 
--- Sentinel row: date_key = 0 → FK fallback cho "unknown date"
--- Guard: chỉ insert nếu 1970-01-01 nằm ngoài calendar range (tránh duplicate)
--- BigQuery yêu cầu FROM clause khi có WHERE clause
 select
     0 as date_key,
     date('1970-01-01') as full_date,

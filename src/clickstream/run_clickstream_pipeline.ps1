@@ -5,6 +5,11 @@ param(
   [string]$Subscription = "projects/$($env:GCP_PROJECT_ID)/subscriptions/clickstream_topic-sub",
   [string]$Dataset = "thelook_clickstream",
   [string]$Table = "events_raw",
+  [int]$DedupTtlMinutes = 60,
+  [int]$SessionGapMinutes = 30,
+  [int]$AllowedLatenessSeconds = 600,
+  [int]$EarlyFiringDelaySeconds = 60,
+  [int]$LateFiringCount = 1,
   [switch]$Init
 )
 
@@ -25,6 +30,11 @@ python src/clickstream/dataflow_job.py `
   --runner DataflowRunner `
   --temp_location "gs://$BucketName/dataflow/tmp" `
   --staging_location "gs://$BucketName/dataflow/staging" `
-  --subscription $Subscription `
+  --events_subscription $Subscription `
   --dataset $Dataset `
-  --raw_table $Table
+  --raw_table $Table `
+  --dedup_ttl_minutes $DedupTtlMinutes `
+  --session_gap_minutes $SessionGapMinutes `
+  --allowed_lateness_seconds $AllowedLatenessSeconds `
+  --early_firing_delay_seconds $EarlyFiringDelaySeconds `
+  --late_firing_count $LateFiringCount

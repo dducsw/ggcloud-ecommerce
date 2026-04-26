@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from urllib.parse import unquote
 
@@ -60,8 +61,16 @@ def load_product_dimension_from_bigquery(project_id: str, dataset: str, table: s
 def load_product_dimension(project_id: str, dataset: str, table: str, fallback_csv_path: str | None = None) -> dict:
     try:
         return load_product_dimension_from_bigquery(project_id, dataset, table)
-    except Exception:
+    except Exception as exc:
         if fallback_csv_path:
+            logging.warning(
+                "Failed to load product dimension from BigQuery %s.%s.%s: %s. Falling back to CSV: %s",
+                project_id,
+                dataset,
+                table,
+                exc,
+                fallback_csv_path,
+            )
             return load_product_dimension_from_csv(fallback_csv_path)
         raise
 

@@ -18,3 +18,7 @@ infra/terraform/.terraform.lock.hcl
 # CDC Data
 infra/cdc/debezium-server/data
 !infra/cdc/debezium-server/data/.gitkeep
+datagen/data/*
+
+# DBT
+dbt/thelook_dwh/target

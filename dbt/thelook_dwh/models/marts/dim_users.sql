@@ -50,8 +50,6 @@ from users_base
 
 union all
 
--- Unknown member: FK fallback khi user không tìm thấy trong source
--- BigQuery yêu cầu FROM clause khi có WHERE clause
 select
     {{ generate_surrogate_key(['-1']) }} as user_key,
     -1 as user_id,

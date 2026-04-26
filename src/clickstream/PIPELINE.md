@@ -1,27 +1,27 @@
 # Clickstream Pipeline
 
-Tài liệu này mô tả luồng clickstream hiện tại trong thư mục `src/clickstream`.
+Tài liệu này mô tả luồng clickstream hiện tại trong `src/clickstream` sau đợt review gần nhất.
 
-## Tổng quan
+## Tổng Quan
 
-Luồng dữ liệu hiện tại:
+Luồng dữ liệu:
 
 ```text
-datagen -> Pub/Sub -> Dataflow -> BigQuery
+datagen -> Pub/Sub -> Dataflow / Apache Beam -> BigQuery
 ```
 
-Cụ thể:
+Các thành phần chính:
 
-1. `datagen/thelook-ecomm/generator.py` hoặc `datagen/thelook-ecomm/generate_events_only.py` sinh event clickstream.
-2. `src/clickstream/event_publisher.py` publish event lên Pub/Sub topic clickstream.
-3. `src/clickstream/dataflow_job.py` là entrypoint chạy Dataflow.
-4. `src/clickstream/pipeline/pipeline.py` orchestration toàn bộ Beam pipeline.
-5. Các transform chính nằm trong `src/clickstream/pipeline/transforms.py`.
-6. Kết quả được ghi ra BigQuery.
+- `datagen/thelook-ecomm/generator.py` hoặc `datagen/thelook-ecomm/generate_events_only.py` sinh event clickstream.
+- `src/clickstream/event_publisher.py` publish event lên Pub/Sub topic.
+- `src/clickstream/dataflow_job.py` là entrypoint chạy Beam/Dataflow job.
+- `src/clickstream/pipeline/pipeline.py` orchestration toàn bộ pipeline.
+- `src/clickstream/pipeline/transforms.py` chứa các transform xử lý dữ liệu chính.
+- `src/clickstream/init_infra.py` tạo BigQuery tables/views và Pub/Sub resources.
 
-## Các bảng và view đầu ra
+## Output Tables Và Views
 
-Pipeline hiện tại sử dụng các bảng và view chính sau:
+Pipeline ghi và phục vụ dữ liệu qua các bảng/view chính:
 
 - `thelook_clickstream.events_raw`
 - `thelook_clickstream.events_deadletter`
@@ -34,132 +34,153 @@ Pipeline hiện tại sử dụng các bảng và view chính sau:
 - `thelook_clickstream.v_daily_channel_kpis`
 - `thelook_clickstream.v_product_interest`
 
-## Luồng chi tiết
+## Luồng Chi Tiết
 
 ### 1. ReadClickstreamPubSub
 
-Pipeline đọc message từ Pub/Sub subscription clickstream.
+Pipeline đọc message JSON thô từ Pub/Sub subscription qua `beam.io.ReadFromPubSub(subscription=args.events_subscription)`.
 
-Input ở bước này là message JSON thô.
+Lưu ý vận hành:
+
+- Script `run_clickstream_pipeline.ps1` phải truyền đúng flag `--events_subscription`.
+- Subscription mặc định trong script là `projects/<project>/subscriptions/clickstream_topic-sub`.
 
 ### 2. ParseValidateDoFn
 
-Transform này:
+`ParseValidateDoFn` thực hiện:
 
-- parse JSON
-- hỗ trợ cả 2 kiểu field:
-  - `event_id` hoặc `id`
-  - `event_timestamp` hoặc `created_at`
-- chuẩn hóa dữ liệu thành schema nội bộ thống nhất
-- kiểm tra các field bắt buộc:
-  - `event_id/id`
-  - `session_id`
-  - `event_type`
-  - `event_timestamp/created_at`
+- Decode message bytes thành UTF-8.
+- Parse JSON.
+- Hỗ trợ alias field `event_id` hoặc `id`.
+- Hỗ trợ alias timestamp `event_timestamp` hoặc `created_at`.
+- Chuẩn hóa timestamp về UTC string.
+- Validate `event_type` theo contract hiện tại của datagen.
+- Gán Beam event-time bằng `TimestampedValue`.
 
-Nếu record lỗi:
+Các field bắt buộc:
 
-- đưa sang nhánh dead-letter
+- `event_id` hoặc `id`
+- `session_id`
+- `event_type`
+- `event_timestamp` hoặc `created_at`
+- `ingested_at`, mặc định lấy theo event timestamp nếu input không có
 
-Nếu record hợp lệ:
+Các `event_type` hợp lệ hiện tại:
 
-- gán `event_timestamp` làm event-time của Beam bằng `TimestampedValue`
+- `home`
+- `department`
+- `category`
+- `product`
+- `cart`
+- `purchase`
+- `cancel`
+- `return`
 
-### 3. Dead-letter
+Record lỗi được đưa sang dead-letter thay vì làm chết pipeline.
 
-Những record lỗi được ghi vào:
+### 3. Dead-Letter
 
-- `events_deadletter`
+Record lỗi được ghi vào `events_deadletter` với:
 
-Mục đích:
+- `raw_message`
+- `error_message`
+- `failed_at`
 
-- không làm chết pipeline
-- dễ kiểm tra chất lượng dữ liệu đầu vào
+Mục đích là giữ pipeline chạy ổn định và có nơi kiểm tra chất lượng dữ liệu đầu vào.
 
 ### 4. DeduplicateEventsDoFn
 
-Pipeline key theo `event_id` rồi dùng Beam state + timer để dedup trong streaming.
+Pipeline key theo `event_id`, sau đó dùng Beam user state và watermark timer để dedup trong runtime.
 
-Mục đích:
+Cơ chế:
 
-- tránh double-count khi message bị redelivery hoặc publish lặp
+- Nếu `event_id` chưa thấy trong state, ghi state và emit record.
+- Nếu `event_id` đã thấy, tăng metric `duplicate_events` và bỏ qua.
+- State được clear sau `dedup_ttl_minutes`.
 
-Lưu ý:
+Đánh giá:
 
-- đây là dedup trong runtime worker
-- downstream vẫn có thêm lớp dedup bằng view BigQuery để an toàn hơn
+- Cách này giảm duplicate do Pub/Sub redelivery hoặc publisher gửi lặp.
+- Đây không phải bảo đảm exactly-once tuyệt đối, vì state có thể mất khi job restart hoặc duplicate đến ngoài TTL.
+- Vì vậy downstream vẫn nên dùng `v_events_raw_dedup` thay vì đọc trực tiếp `events_raw` cho analytics.
 
-### 5. Product lookup và enrichment
+### 5. Product Lookup Và Enrichment
 
-Pipeline enrich dữ liệu bằng `EnrichEventDoFn`.
+`EnrichEventDoFn` bổ sung thông tin derived/enriched:
 
-Transform này:
+- Parse `uri` thành `page_type`.
+- Parse `product_id` nếu URI là trang product.
+- Lookup product snapshot để lấy `product_category`, `product_department`, `product_name`.
+- Tính `is_conversion`.
+- Gắn `processing_time`.
+- Tính `event_lag_seconds`.
 
-- parse `uri` để suy ra:
-  - `page_type`
-  - `product_id`
-- lookup thông tin product để enrich:
-  - `product_category`
-  - `product_department`
-  - `product_name`
-- bổ sung:
-  - `is_conversion`
-  - `processing_time`
-  - `event_lag_seconds`
+Product lookup hiện là snapshot có chủ đích:
 
-Hiện trạng product lookup:
+- Pipeline gọi `load_product_dimension(...)` khi job khởi động.
+- Product map được đưa vào Beam side input bằng `CreateInitialProductMap`.
+- Không có refresh định kỳ trong job đang chạy.
+- Nếu product dimension thay đổi và cần phản ánh vào clickstream enrichment, restart Dataflow job để nạp snapshot mới.
+- Nếu load từ BigQuery lỗi và có `products_csv`, pipeline log warning rồi fallback sang CSV.
 
-- pipeline load product dimension từ BigQuery
-- trong code hiện tại đang dùng `CreateInitialProductMap`, tức load một lần khi job khởi động
-- có ghi chú trong `pipeline.py` rằng refresh định kỳ có thể bật lại trong Dataflow production, nhưng đang tắt để ổn định hơn khi test local
+Đánh giá:
+
+- Snapshot lookup giúp enrichment ổn định, đơn giản và dễ debug.
+- Trade-off là product metadata có thể stale cho đến lần restart job tiếp theo.
+- Đây là lựa chọn phù hợp hiện tại vì yêu cầu đã xác nhận chưa cần refresh định kỳ.
 
 ### 6. Write events_raw
 
-Sau khi parse, validate, dedup và enrich, dữ liệu được ghi vào:
+Sau parse, validate, dedup và enrich, record được ghi append-only vào `events_raw`.
 
-- `events_raw`
+Đặc điểm:
 
-Đây là bảng raw chi tiết nhất của clickstream.
+- Partition theo `event_date`.
+- Cluster theo `event_type`, `traffic_source`, `browser`.
+- Ghi bằng BigQuery streaming inserts.
+
+Khuyến nghị sử dụng:
+
+- `events_raw` là bảng lưu chi tiết và có tính append-only.
+- Dashboard/query nghiệp vụ nên đọc `v_events_raw_dedup` để tránh double count nếu duplicate lọt qua runtime dedup.
 
 ### 7. v_events_raw_dedup
 
-Vì `events_raw` là append-only streaming table, downstream analytics dùng:
+View này dedup theo `event_id`:
 
-- `v_events_raw_dedup`
-
-View này dedup theo `event_id` và lấy record mới nhất theo:
-
-- `ingested_at DESC`
-- `processing_time DESC`
+```sql
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY event_id
+  ORDER BY ingested_at DESC, processing_time DESC
+) = 1
+```
 
 Mục đích:
 
-- giảm rủi ro duplicate nếu Beam state bị mất khi restart
+- Bù cho các trường hợp duplicate vẫn lọt vào bảng raw.
+- Tạo serving layer an toàn hơn cho analytics.
 
-## Nhánh aggregate 5 phút
+## Nhánh Aggregate 5 Phút
 
 ### 8. Window5Minutes
 
-Từ `enriched_events`, pipeline rẽ sang nhánh aggregate realtime.
+Từ `enriched_events`, pipeline rẽ sang nhánh aggregate realtime và dùng:
 
-Pipeline dùng:
+- `FixedWindows(300)` theo event-time.
+- `allowed_lateness_seconds`.
+- Early firing bằng `AfterProcessingTime`.
+- Late firing bằng `AfterCount`.
+- `ACCUMULATING` mode.
 
-- `FixedWindows(300)` tức cửa sổ 5 phút theo event-time
+Đánh giá:
 
-Hai nhánh `events_5m` và `session_metrics` cùng dùng chung một policy window:
-
-- `allowed_lateness_seconds`
-- `early_firing_delay_seconds`
-- `late_firing_count`
-- `ACCUMULATING`
-
-Mục đích:
-
-- nhất quán hành vi giữa aggregate 5 phút và session window
+- Cách này cho dashboard có kết quả sớm.
+- Khi late event đến, cùng một aggregate window có thể phát thêm version mới.
+- Vì vậy downstream cần dùng view latest.
 
 ### 9. AggregateKey
 
-Mỗi event được group theo:
+Aggregate key gồm:
 
 - `event_date`
 - `traffic_source`
@@ -167,11 +188,7 @@ Mỗi event được group theo:
 - `event_type`
 - `page_type`
 
-### 10. GroupAggregateRows
-
-Gom tất cả event cùng key trong cùng window lại.
-
-### 11. create_aggregate_record
+### 10. create_aggregate_record
 
 Transform này tính:
 
@@ -180,15 +197,9 @@ Transform này tính:
 - `unique_users`
 - `purchase_events`
 - `avg_event_lag_seconds`
-
-Nó còn gắn:
-
-- `window_start`
-- `window_end`
-- `aggregate_id`
 - `version_emitted_at`
 
-`aggregate_id` được tạo deterministically từ:
+`aggregate_id` được tạo từ:
 
 - `window_start`
 - `event_date`
@@ -197,62 +208,55 @@ Nó còn gắn:
 - `event_type`
 - `page_type`
 
-Mục đích:
+Mục đích là cùng một window và cùng một aggregate key sẽ có cùng `aggregate_id`, kể cả khi có nhiều emitted versions.
 
-- cùng một window và cùng key sẽ có cùng `aggregate_id`
+### 11. Write events_5m
 
-### 12. Write events_5m
+Aggregate được ghi append vào `events_5m`.
 
-Aggregate được ghi vào:
+Do dùng `ACCUMULATING`, bảng này có thể chứa nhiều version cho cùng một `aggregate_id`.
 
-- `events_5m`
+### 12. v_events_5m_latest
 
-Vì dùng `ACCUMULATING`, cùng một window có thể có nhiều version nếu late event đến.
-
-### 13. v_events_5m_latest
-
-Dashboard và query downstream nên dùng:
-
-- `v_events_5m_latest`
+Dashboard nên dùng `v_events_5m_latest`.
 
 View này lấy version mới nhất theo:
 
 - `aggregate_id`
 - `version_emitted_at DESC`
 
-Mục đích:
+Mục đích là tránh cộng đôi nhiều version của cùng một aggregate window.
 
-- tránh cộng đôi do nhiều version của cùng một aggregate window
+## Nhánh Session
 
-## Nhánh session
+### 13. KeyBySessionId
 
-### 14. KeyBySessionId
+Từ `enriched_events`, pipeline chuyển record thành:
 
-Từ `enriched_events`, pipeline chuyển thành:
+```text
+(session_id, row)
+```
 
-- `(session_id, row)`
+### 14. SessionWindow
 
-### 15. SessionWindow
+Pipeline dùng Beam session window:
 
-Pipeline dùng:
+```python
+beam.window.Sessions(args.session_gap_minutes * 60)
+```
 
-- `beam.window.Sessions(session_gap_minutes * 60)`
-
-Mặc định:
-
-- gap là 30 phút
+Mặc định `session_gap_minutes = 30`.
 
 Ý nghĩa:
 
-- nếu user im lặng quá 30 phút thì Beam coi đó là session mới
+- Nếu cùng `session_id` không có event mới trong 30 phút, Beam coi session window đã kết thúc.
+- Nếu late event đến trong allowed lateness, Beam có thể cập nhật lại session metric.
 
-### 16. GroupSessionRows
+### 15. build_session_metric
 
-Gom toàn bộ event trong cùng session sau khi Beam merge session window.
+Transform này gom event trong session, sort theo `event_timestamp`, rồi tạo một record tổng hợp.
 
-### 17. build_session_metric
-
-Transform này tạo một record tổng hợp cho mỗi session:
+Các metric chính:
 
 - `session_record_id`
 - `session_id`
@@ -276,40 +280,51 @@ Transform này tạo một record tổng hợp cho mỗi session:
 `session_record_id` hiện được tạo từ:
 
 - `session_id`
-- `session_start`
 
-Mục đích:
+Lý do:
 
-- version-safe cho cùng một session record khi late event làm session bị cập nhật lại
+- `session_start` có thể thay đổi khi late event đến sớm hơn event đầu tiên đã thấy trước đó.
+- Nếu dùng `session_id + session_start`, cùng một session logic có thể sinh nhiều identity key khác nhau.
+- Dùng `session_id` giúp latest view chọn đúng version mới nhất cho cùng một session.
 
-### 18. Write session_metrics
+Các flag funnel:
 
-Kết quả được ghi vào:
+- `saw_home` dựa trên `page_type == "home"`.
+- `saw_product` dựa trên `page_type == "product"`.
 
-- `session_metrics`
+Lý do:
 
-### 19. v_session_metrics_latest
+- `page_type` mô tả user đang ở loại trang nào.
+- `event_type` mô tả hành động hoặc loại event.
+- Với câu hỏi "session đã thấy home/product page chưa", dùng `page_type` đúng ngữ nghĩa hơn.
 
-Downstream analytics nên dùng:
+### 16. Write session_metrics
 
-- `v_session_metrics_latest`
+Session metrics được ghi append vào `session_metrics`.
+
+Do session window dùng accumulating panes, bảng này có thể chứa nhiều version cho cùng một `session_id`.
+
+### 17. v_session_metrics_latest
+
+Downstream analytics nên dùng `v_session_metrics_latest`.
 
 View này lấy version mới nhất theo:
 
-- `session_record_id`
+- `session_id`
 - `version_emitted_at DESC`
 
-### 20. v_session_funnel
+Mục đích là tránh double count khi cùng một session được emit nhiều lần do early/late firing.
 
-View funnel session hiện đọc từ:
+### 18. v_session_funnel
 
-- `v_session_metrics_latest`
+`v_session_funnel` đọc từ `v_session_metrics_latest`.
 
 Mục đích:
 
-- phân tích funnel trên session record mới nhất
+- Phân tích funnel trên session record mới nhất.
+- Tránh dùng trực tiếp bảng append-only `session_metrics`.
 
-## Các view business chính
+## Business Views
 
 ### v_daily_channel_kpis
 
@@ -319,11 +334,11 @@ Nguồn:
 
 Tính:
 
-- tổng events theo ngày và traffic source
-- total sessions distinct
-- total users distinct
-- purchase events
-- purchase per session
+- Tổng events theo ngày và traffic source.
+- Tổng sessions distinct.
+- Tổng users distinct.
+- Purchase events.
+- Purchase per session.
 
 ### v_product_interest
 
@@ -331,18 +346,42 @@ Nguồn:
 
 - `v_events_raw_dedup`
 
-Tính:
+Tính theo ngày và product:
 
-- product views
-- add-to-cart events
-- purchase events
+- Product views bằng `COUNTIF(page_type = 'product')`.
+- Add-to-cart events.
+- Purchase events.
 
-theo sản phẩm và ngày.
+## Đánh Giá Sau Review
 
-## Ghi chú quan trọng
+Các điểm đã cải thiện:
 
-- `events_raw` là bảng raw append-only
-- `events_5m` và `session_metrics` là bảng aggregate có version
-- downstream nên ưu tiên dùng các view latest/dedup để tránh double count
-- session hiện chỉ dùng một cơ chế duy nhất là Beam Session Window
-- product lookup hiện load một lần lúc job khởi động; phần refresh định kỳ đã được cân nhắc nhưng đang tắt trong code để ổn định hơn khi test local
+- Script chạy Dataflow đã dùng đúng flag `--events_subscription`.
+- Script chạy Dataflow expose các tham số tuning chính: dedup TTL, session gap, allowed lateness, early firing delay, late firing count.
+- Product lookup đã được xác nhận là snapshot và code đã dọn phần refresh định kỳ không dùng.
+- Product lookup fallback sang CSV có warning log để dễ debug lỗi BigQuery permission/table.
+- `session_record_id` ổn định hơn vì không còn phụ thuộc `session_start`.
+- `v_session_metrics_latest` lấy latest theo `session_id`, khớp với logic session key mới.
+- `saw_home` và `saw_product` dùng `page_type`, nhất quán với `pageview_count` và `product_view_count`.
+- `v_product_interest` dùng `page_type = 'product'` cho product views, đúng ngữ nghĩa page classification.
+- `build_session_metric` có guard cap 5000 events/session để giảm rủi ro session bất thường làm worker tốn memory.
+- `version_emitted_at` và `processed_at` trong session metric dùng cùng một timestamp.
+- Pub/Sub subscription mới tạo dùng `ack_deadline_seconds = 600` để phù hợp hơn với Dataflow streaming.
+- Publisher giữ `publish()` đồng bộ để tương thích, đồng thời có thêm `publish_async()` và `publish_batch()` cho luồng publish throughput cao hơn.
+
+Các rủi ro còn lại:
+
+- `events_raw`, `events_5m`, và `session_metrics` vẫn là append-oriented tables; đọc trực tiếp các bảng này có thể double count.
+- BigQuery streaming inserts không tự đảm bảo dedup tuyệt đối cho mọi tình huống restart/redelivery.
+- Product metadata có thể stale cho đến khi restart Dataflow job.
+- `build_session_metric` vẫn cần materialize session trước khi cap, vì pipeline hiện dùng `GroupByKey`.
+- Dedup TTL đang dùng watermark timer; nếu watermark bị giữ bởi late data nhiều, state cleanup có thể trễ hơn wall-clock TTL.
+- `publish()` đơn lẻ vẫn chờ `future.result()`; dùng `publish_batch()` hoặc `publish_async()` khi cần throughput cao.
+
+Khuyến nghị vận hành:
+
+- Dashboard và marts nên dùng các view latest/dedup.
+- Theo dõi Beam metrics `valid_events`, `invalid_events`, `duplicate_events`.
+- Theo dõi số lượng record trong `events_deadletter`.
+- Tune `dedup_ttl_minutes`, `allowed_lateness_seconds`, và `session_gap_minutes` dựa trên dữ liệu thực tế.
+- Restart Dataflow job có kiểm soát khi cần cập nhật product dimension snapshot.

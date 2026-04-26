@@ -3,7 +3,7 @@
   "config": {
     "connector.class": "com.google.pubsub.kafka.sink.CloudPubSubSinkConnector",
     "tasks.max": "1",
-    "topics": "thelook.demo.users,thelook.demo.products,thelook.demo.distribution_centers,thelook.demo.orders,thelook.demo.order_items,thelook.demo.events",
+    "topics": "thelook.demo.users,thelook.demo.products,thelook.demo.distribution_centers,thelook.demo.inventory_items,thelook.demo.orders,thelook.demo.order_items,thelook.demo.events",
     "cps.project": "${env:GCP_PROJECT_ID}",
     "cps.topic": "thelook-cdc-events",
     "key.converter": "org.apache.kafka.connect.storage.StringConverter",

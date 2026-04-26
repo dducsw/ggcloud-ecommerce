@@ -22,7 +22,6 @@ def run(argv=None):
     parser.add_argument("--product_lookup_project", default=None)
     parser.add_argument("--product_lookup_dataset", default="thelook_staging")
     parser.add_argument("--product_lookup_table", default="products")
-    parser.add_argument("--product_refresh_minutes", type=int, default=15)
     parser.add_argument("--products_csv", default=str(Path("datagen/thelook-ecomm/src/data/products.csv")))
     parser.add_argument("--allowed_lateness_seconds", type=int, default=600)
     parser.add_argument("--early_firing_delay_seconds", type=int, default=60)

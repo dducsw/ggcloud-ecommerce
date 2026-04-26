@@ -1,8 +1,6 @@
 from apache_beam.options.pipeline_options import PipelineOptions, SetupOptions, StandardOptions
 from apache_beam.transforms import trigger
 import apache_beam as beam
-from apache_beam.transforms.combiners import Latest
-from apache_beam.transforms.periodicsequence import PeriodicImpulse
 
 from src.clickstream.pipeline.schemas import AGGREGATE_SCHEMA, DEADLETTER_SCHEMA, RAW_EVENTS_SCHEMA, SESSION_SCHEMA
 from src.clickstream.pipeline.sinks import write_bq
@@ -14,7 +12,7 @@ from src.clickstream.pipeline.transforms import (
     create_aggregate_record,
     to_aggregate_key,
 )
-from src.clickstream.pipeline.utils import load_product_dimension, utc_now
+from src.clickstream.pipeline.utils import load_product_dimension
 
 
 def build_pipeline_options(args, pipeline_args):
@@ -58,10 +56,9 @@ def run_pipeline(args, pipeline_args):
             table=args.product_lookup_table,
             fallback_csv_path=args.products_csv,
         )
-        refresh_interval_seconds = args.product_refresh_minutes * 60
 
-        # Note: PeriodicImpulse can be unstable in some DirectRunner versions for streaming.
-        # For local testing, we use a single load. In production (Dataflow), we can re-enable refresh.
+        # Product dimension is intentionally a startup snapshot for deterministic enrichment.
+        # Restart the job when the product lookup table needs to be refreshed.
         product_side_input = beam.pvalue.AsSingleton(
             pipeline
             | "CreateInitialProductMap" >> beam.Create([initial_product_map])

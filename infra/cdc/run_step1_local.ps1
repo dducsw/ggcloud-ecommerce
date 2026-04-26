@@ -1,41 +1,21 @@
 param(
   [string]$ComposeFile = "docker-compose.yaml",
-  [string]$ConnectorConfig = "infra/cdc/connectors/debezium-connector.json",
-  [string]$ConnectUrl = "http://localhost:8083"
+  [string]$ProjectId = "cloud-data-project-492514"
 )
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "[Step1] Starting Postgres + Kafka + Debezium + Datagen..."
-docker compose -f $ComposeFile up -d postgres-source kafka debezium-cdc datagen
+Write-Host "[Step1] Starting Postgres + Debezium Server..."
+docker compose -f $ComposeFile up -d postgres-source debezium-server
 if ($LASTEXITCODE -ne 0) {
-  throw "docker compose up failed. Check: docker compose -f $ComposeFile ps and logs kafka/debezium-cdc"
-}
-if ($LASTEXITCODE -ne 0) {
-  throw "docker compose failed to start services."
+  throw "docker compose up failed. Check: docker compose -f $ComposeFile ps and logs debezium-server"
 }
 
-Write-Host "[Step1] Waiting for Debezium REST API..."
-$maxAttempts = 30
-for ($i = 1; $i -le $maxAttempts; $i++) {
-  try {
-    $null = Invoke-RestMethod -Uri "$ConnectUrl/connectors" -Method Get -TimeoutSec 3
-    Write-Host "Debezium is ready."
-    break
-  }
-  catch {
-    if ($i -eq $maxAttempts) {
-      throw "Debezium is not ready after $maxAttempts attempts."
-    }
-    Start-Sleep -Seconds 2
-  }
-}
-
-Write-Host "[Step1] Registering Debezium connector..."
-python src/cdc/register_debezium_connector.py --connect-url $ConnectUrl --config-path $ConnectorConfig
+Write-Host "[Step1] Ensuring Pub/Sub topics/subscriptions for Debezium Server..."
+python src/etl/debezium_incremental.py --project-id $ProjectId
 if ($LASTEXITCODE -ne 0) {
-  throw "Failed to register Debezium connector."
+  throw "Failed to prepare Debezium Server incremental CDC flow."
 }
 
 Write-Host "[Step1] Done."
-Write-Host "Check connector status: $ConnectUrl/connectors/thelook-postgres-source/status"
+Write-Host "Check logs: docker compose -f $ComposeFile logs -f debezium-server"
