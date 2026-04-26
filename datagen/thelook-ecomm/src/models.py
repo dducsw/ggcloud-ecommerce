@@ -21,6 +21,15 @@ PRODUCT_MAP = get_product_map("products.csv")
 
 def get_additional_ddls(schema: str):
     return {
+        "distribution_centers": inspect.cleandoc(
+            f"""
+            CREATE TABLE IF NOT EXISTS {schema}.distribution_centers (
+                id BIGINT PRIMARY KEY,
+                name TEXT,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION
+            );"""
+        ),
         "products": inspect.cleandoc(
             f"""
             CREATE TABLE IF NOT EXISTS {schema}.products (
@@ -38,15 +47,6 @@ def get_additional_ddls(schema: str):
                 CONSTRAINT fk_products_distribution_center
                     FOREIGN KEY (distribution_center_id)
                     REFERENCES {schema}.distribution_centers (id)
-            );"""
-        ),
-        "distribution_centers": inspect.cleandoc(
-            f"""
-            CREATE TABLE IF NOT EXISTS {schema}.distribution_centers (
-                id BIGINT PRIMARY KEY,
-                name TEXT,
-                latitude DOUBLE PRECISION,
-                longitude DOUBLE PRECISION
             );"""
         ),
         "inventory_items": inspect.cleandoc(
@@ -90,7 +90,7 @@ def get_additional_ddls(schema: str):
 class OrderStatus(Enum):
     PROCESSING = "Processing"
     SHIPPED = "Shipped"
-    DELIVERED = "Delivered"
+    COMPLETE = "Complete"
     CANCELLED = "Cancelled"
     RETURNED = "Returned"
 
@@ -282,12 +282,12 @@ class Order(ModelMixin):
             status_changed = True
 
         elif self.status == OrderStatus.SHIPPED.value:
-            # Deterministic transition from Shipped to Delivered (Complete)
-            self.status = "Complete"  # Match CSV status
+            # Deterministic transition from Shipped to Complete.
+            self.status = OrderStatus.COMPLETE.value
             self.delivered_at = datetime.datetime.now()
             status_changed = True
 
-        elif self.status == "Complete":
+        elif self.status == OrderStatus.COMPLETE.value:
             # Probabilistic transition from Complete to Returned
             if random.random() < return_probability:
                 self.status = OrderStatus.RETURNED.value
@@ -328,7 +328,7 @@ class Order(ModelMixin):
             CONSTRAINT chk_orders_delivered_after_shipped
                 CHECK (delivered_at IS NULL OR shipped_at IS NULL OR delivered_at >= shipped_at),
             CONSTRAINT chk_orders_returned_after_delivered
-                CHECK (returned_at IS NULL OR delivered_at IS NULL OR returned_at >= delivered_at)
+                CHECK (returned_at IS NULL OR (delivered_at IS NOT NULL AND returned_at >= delivered_at))
         );
         """
         )
@@ -352,6 +352,8 @@ class OrderItem(ModelMixin):
     @classmethod
     def new(cls, order: Order, fake: Faker) -> Self:
         product_id = fake.random_element(PRODUCT_MAP.keys())
+        base_price = float(PRODUCT_MAP[product_id]["retail_price"])
+        sale_price = round(base_price * random.uniform(0.85, 1.0), 2)
         return cls(
             id=random.randint(100000, 999999999),  # Generate random BIGINT ID
             order_id=order.order_id,
@@ -359,7 +361,7 @@ class OrderItem(ModelMixin):
             product_id=product_id,
             inventory_item_id=None,  # Will be populated later if needed
             status=order.status,
-            sale_price=PRODUCT_MAP[product_id]["retail_price"],
+            sale_price=sale_price,
             created_at=order.created_at,
             updated_at=order.updated_at,
             shipped_at=order.shipped_at,
@@ -372,7 +374,6 @@ class OrderItem(ModelMixin):
 
     def update_status(self, order: Order) -> Self:
         self.status = order.status
-        self.created_at = order.created_at
         self.updated_at = order.updated_at
         self.shipped_at = order.shipped_at
         self.delivered_at = order.delivered_at
@@ -417,7 +418,7 @@ class OrderItem(ModelMixin):
             CONSTRAINT chk_order_items_delivered_after_shipped
                 CHECK (delivered_at IS NULL OR shipped_at IS NULL OR delivered_at >= shipped_at),
             CONSTRAINT chk_order_items_returned_after_delivered
-                CHECK (returned_at IS NULL OR delivered_at IS NULL OR returned_at >= delivered_at)
+                CHECK (returned_at IS NULL OR (delivered_at IS NOT NULL AND returned_at >= delivered_at))
         );
         """
         )
@@ -463,8 +464,16 @@ class Event(ModelMixin):
                 created_at = datetime.datetime.now()
                 event_types = ["product", "cart", event_category]
         elif event_category == "ghost":
-            location = get_location()
-            user_id = None
+            location = (
+                {
+                    "city": user.city,
+                    "state": user.state,
+                    "postal_code": user.postal_code,
+                }
+                if user is not None
+                else get_location()
+            )
+            user_id = user.id if user is not None else None
             city = location["city"]
             state = location["state"]
             postal_code = location["postal_code"]

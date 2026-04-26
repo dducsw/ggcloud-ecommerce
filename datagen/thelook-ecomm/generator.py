@@ -4,13 +4,20 @@ import random
 import logging
 import datetime
 import os
+import sys
+import threading
+from pathlib import Path
 
 from faker import Faker
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from src.db_writer import DataWriter
 from src.id_allocator import IdAllocator
-from src.models import User, Order, OrderItem, Event, OrderStatus, EventCategory
+from src.models import User, Order, OrderItem, Event, OrderStatus, EventCategory, PRODUCT_MAP
 from src.utils import generate_from_csv
 from src.clickstream.event_publisher import ClickstreamEventPublisher
 
@@ -29,12 +36,13 @@ class TheLookECommSimulator:
         self.args = args
         self.fake = fake
         self.writer = DataWriter(
-            args.db_user,
-            args.db_password,
-            args.db_host,
-            args.db_name,
-            args.db_schema,
-            args.db_batch_size,
+            user=args.db_user,
+            password=args.db_password,
+            host=args.db_host,
+            db_name=args.db_name,
+            schema=args.db_schema,
+            port=args.db_port,
+            batch_size=args.db_batch_size,
         )
         self.consecutive_db_errors = 0
         self.max_consecutive_errors = 3
@@ -44,6 +52,7 @@ class TheLookECommSimulator:
         self.order_ids = IdAllocator()
         self.order_item_ids = IdAllocator()
         self.event_ids = IdAllocator()
+        self._db_lock = threading.RLock()
         self.clickstream_publisher = None
         if args.publish_clickstream:
             self.clickstream_publisher = ClickstreamEventPublisher(
@@ -98,13 +107,15 @@ class TheLookECommSimulator:
             event.id = self.event_ids.allocate()
 
     def _sanitize_browsing_events(self, events: list[Event]) -> list[Event]:
+        import re
         for event in events:
             event.id = self.event_ids.allocate()
             if event.event_type in {"purchase", "cancel", "return"}:
                 event.event_type = "product"
-                event.uri = (
-                    event.uri if event.uri.startswith("/product/") else "/product"
-                )
+            # Ensure all product events have a valid /product/{id} URI
+            if event.event_type == "product" and not re.match(r"^/product/\d+$", event.uri):
+                product_id = random.choice(list(PRODUCT_MAP.keys()))
+                event.uri = f"/product/{product_id}"
         return events
 
     def _next_inventory_id(self) -> int:
@@ -166,7 +177,7 @@ class TheLookECommSimulator:
             logging.info("inventory_items already populated. Skip initial seeding.")
             return
 
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         inventory_rows = []
         for product_id in self.product_lookup.keys():
             for _ in range(units_per_product):
@@ -258,7 +269,17 @@ class TheLookECommSimulator:
         order_items: list[OrderItem],
         purchase_events: list[Event],
     ):
+        with self._db_lock:
+            self._persist_purchase_bundle_locked(order, order_items, purchase_events)
+
+    def _persist_purchase_bundle_locked(
+        self,
+        order: Order,
+        order_items: list[OrderItem],
+        purchase_events: list[Event],
+    ):
         try:
+            self.writer.begin()
             for order_item in order_items:
                 order_item.inventory_item_id = self._allocate_inventory_item(
                     product_id=int(order_item.product_id), sold_at=order.created_at
@@ -312,12 +333,7 @@ class TheLookECommSimulator:
                 postal_code=self.args.postal_code,
                 fake=self.fake,
             )
-            await asyncio.to_thread(
-                self.writer.upsert,
-                table="users",
-                data=[random_user],
-                conflict_keys=["id"],
-            )
+            await asyncio.to_thread(self._upsert_users_locked, [random_user])
 
         # Generate the order and its associated events
         order = Order.new(user=random_user, fake=self.fake)
@@ -348,10 +364,29 @@ class TheLookECommSimulator:
 
     def _simulate_order_update(self):
         """Synchronous helper containing the logic for updating an order. To be run in a thread."""
+        with self._db_lock:
+            return self._simulate_order_update_locked()
+
+    def _simulate_order_update_locked(self):
+        updatable_statuses = [
+            OrderStatus.PROCESSING.value,
+            OrderStatus.SHIPPED.value,
+            OrderStatus.COMPLETE.value,
+        ]
         random_order_list = self.writer.select(
             table="orders",
-            where_clause="status in ('Processing', 'Shipped', 'Complete')",
-            order_by="case when status = 'Complete' then 0 when status = 'Shipped' then 1 else 2 end, RANDOM()",
+            where_clause="status in (:processing_status, :shipped_status, :complete_status)",
+            where_params={
+                "processing_status": OrderStatus.PROCESSING.value,
+                "shipped_status": OrderStatus.SHIPPED.value,
+                "complete_status": OrderStatus.COMPLETE.value,
+            },
+            order_by=(
+                "case "
+                f"when status = '{OrderStatus.COMPLETE.value}' then 0 "
+                f"when status = '{OrderStatus.SHIPPED.value}' then 1 "
+                "else 2 end, RANDOM()"
+            ),
             limit=1,
         )
         if not random_order_list:
@@ -447,12 +482,7 @@ class TheLookECommSimulator:
             )
             new_user.id = self.user_ids.allocate()
             side_tasks.append(
-                asyncio.to_thread(
-                    self.writer.upsert,
-                    table="users",
-                    data=[new_user],
-                    conflict_keys=["id"],
-                )
+                asyncio.to_thread(self._upsert_users_locked, [new_user])
             )
 
         if (
@@ -467,12 +497,7 @@ class TheLookECommSimulator:
                 fake=self.fake,
             ))
             side_tasks.append(
-                asyncio.to_thread(
-                    self.writer.upsert,
-                    table="events",
-                    data=ghost_events,
-                    conflict_keys=["id"],
-                )
+                asyncio.to_thread(self._upsert_events_locked, ghost_events)
             )
 
         if (
@@ -485,6 +510,14 @@ class TheLookECommSimulator:
 
         if side_tasks:
             await asyncio.gather(*side_tasks)
+
+    def _upsert_users_locked(self, users: list[User]):
+        with self._db_lock:
+            self.writer.upsert(table="users", data=users, conflict_keys=["id"])
+
+    def _upsert_events_locked(self, events: list[Event]):
+        with self._db_lock:
+            self.writer.upsert(table="events", data=events, conflict_keys=["id"])
 
     async def run(self):
         """The main simulation loop, which orchestrates primary and side tasks."""
@@ -569,6 +602,7 @@ def main():
     parser.add_argument("--ghost-create-prob", type=float, default=0.2, help="Probability of generating a ghost event. Default is 0.2. Set to 0 to disable.")
     ## --- Database Arguments ---
     parser.add_argument("--db-host", default="localhost", help="Database host.")
+    parser.add_argument("--db-port", type=int, default=5432, help="Database port.")
     parser.add_argument("--db-user", default="db_user", help="Database user.")
     parser.add_argument("--db-password", default="db_password", help="Database password.")
     parser.add_argument("--db-name", default="fh_dev", help="Database name.")

@@ -2,14 +2,21 @@ import argparse
 import asyncio
 import logging
 import random
+import re
+import sys
+from pathlib import Path
 
 from faker import Faker
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from src.clickstream.event_publisher import ClickstreamEventPublisher
 from src.db_writer import DataWriter
 from src.id_allocator import IdAllocator
-from src.models import Event, EventCategory, User
+from src.models import Event, EventCategory, User, PRODUCT_MAP
 
 
 logging.basicConfig(
@@ -84,17 +91,14 @@ class EventsOnlySimulator:
             return
 
         user = User.from_dict(user_rows[0])
-        events = Event.new(user=None, order_item=None, event_category=EventCategory.GHOST.value, fake=self.fake)
+        events = Event.new(user=user, order_item=None, event_category=EventCategory.GHOST.value, fake=self.fake)
         for event in events:
             event.id = self.event_ids.allocate()
-            event.user_id = user.id
-            event.city = user.city
-            event.state = user.state
-            event.postal_code = user.postal_code
-            event.traffic_source = user.traffic_source
             if event.event_type in {"purchase", "cancel", "return"}:
                 event.event_type = "product"
-                event.uri = event.uri if event.uri.startswith("/product/") else "/product"
+            if event.event_type == "product" and not re.match(r"^/product/\d+$", event.uri):
+                product_id = random.choice(list(PRODUCT_MAP.keys()))
+                event.uri = f"/product/{product_id}"
 
         await asyncio.to_thread(
             self.writer.upsert, table="events", data=events, conflict_keys=["id"]
@@ -112,7 +116,9 @@ class EventsOnlySimulator:
             event.id = self.event_ids.allocate()
             if event.event_type in {"purchase", "cancel", "return"}:
                 event.event_type = "product"
-                event.uri = event.uri if event.uri.startswith("/product/") else "/product"
+            if event.event_type == "product" and not re.match(r"^/product/\d+$", event.uri):
+                product_id = random.choice(list(PRODUCT_MAP.keys()))
+                event.uri = f"/product/{product_id}"
         await asyncio.to_thread(
             self.writer.upsert, table="events", data=events, conflict_keys=["id"]
         )
