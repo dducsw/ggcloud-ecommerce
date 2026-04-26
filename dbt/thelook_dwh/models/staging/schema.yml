@@ -13,6 +13,11 @@ models:
         description: "User placing the order."
         tests:
           - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+              config:
+                severity: warn
       - name: status
         description: "Latest business order status from the source."
         tests:
@@ -35,6 +40,35 @@ models:
       - name: order_id
         tests:
           - not_null
+          - relationships:
+              to: ref('stg_orders')
+              field: order_id
+              config:
+                severity: warn
+      - name: user_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+              config:
+                severity: warn
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_products')
+              field: product_id
+              config:
+                severity: warn
+      - name: inventory_item_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_inventory_items')
+              field: inventory_item_id
+              config:
+                severity: warn
       - name: sale_price
         tests:
           - not_null

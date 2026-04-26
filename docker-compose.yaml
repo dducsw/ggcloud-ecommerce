@@ -27,8 +27,8 @@ services:
 
   datagen:
     build:
-      context: ./datagen/thelook-ecomm
-      dockerfile: Dockerfile
+      context: ./
+      dockerfile: datagen/thelook-ecomm/Dockerfile
     container_name: ggcloud_datagen
     profiles:
       - manual

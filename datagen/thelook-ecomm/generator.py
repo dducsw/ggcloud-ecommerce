@@ -11,7 +11,15 @@ from pathlib import Path
 from faker import Faker
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
+# Local: datagen/thelook-ecomm/generator.py  -> parents[2] = repo root
+# Docker: /app/generator.py                  -> parents[0] = /app (src/ is copied here)
+try:
+    REPO_ROOT = SCRIPT_DIR.parents[1]  # datagen/thelook-ecomm -> repo root
+    if not (REPO_ROOT / "src").exists():
+        raise IndexError("src/ not found at parents[1], try script dir")
+except (IndexError, OSError):
+    REPO_ROOT = SCRIPT_DIR  # Docker: /app has src/ copied directly
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -224,18 +232,7 @@ class TheLookECommSimulator:
                     conflict_keys=["id"],
                 )
 
-            existing_products = await asyncio.to_thread(
-                self.writer.select, table="products", columns=["count(*) as cnt"]
-            )
-            if int(existing_products[0]["cnt"]) == 0:
-                logging.info("Writing initial products...")
-                await asyncio.to_thread(
-                    self.writer.upsert,
-                    table="products",
-                    data=products,
-                    conflict_keys=["id"],
-                )
-
+            # distribution_centers phải được insert TRƯỚC products do FK constraint
             existing_distribution_centers = await asyncio.to_thread(
                 self.writer.select,
                 table="distribution_centers",
@@ -247,6 +244,18 @@ class TheLookECommSimulator:
                     self.writer.upsert,
                     table="distribution_centers",
                     data=generate_from_csv("distribution_centers.csv"),
+                    conflict_keys=["id"],
+                )
+
+            existing_products = await asyncio.to_thread(
+                self.writer.select, table="products", columns=["count(*) as cnt"]
+            )
+            if int(existing_products[0]["cnt"]) == 0:
+                logging.info("Writing initial products...")
+                await asyncio.to_thread(
+                    self.writer.upsert,
+                    table="products",
+                    data=products,
                     conflict_keys=["id"],
                 )
 
