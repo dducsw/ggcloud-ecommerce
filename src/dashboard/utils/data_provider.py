@@ -11,6 +11,7 @@ class DataProvider:
     def __init__(self):
         self.project_id = os.getenv("GCP_PROJECT_ID")
         self.dataset = os.getenv("DWH_DATASET_ID") or os.getenv("GOLD_DATASET_ID", "thelook_datawarehouse")
+        self.clickstream_dataset = os.getenv("CLICKSTREAM_DATASET_ID", "thelook_clickstream")
         if not self.project_id:
             st.error("BigQuery project is not configured. Set GCP_PROJECT_ID.")
             st.stop()
@@ -41,8 +42,8 @@ class DataProvider:
         return f"`{self.project_id}.{self.dataset}.{table}`"
 
     def table_ref(self, table: str) -> str:
-        """Alias for _t to support clickstream legacy code."""
-        return self._t(table)
+        """Alias for _t to support clickstream legacy code, using clickstream dataset."""
+        return f"`{self.project_id}.{self.clickstream_dataset}.{table}`"
 
     def _date_params(self, ds, de):
         return (
@@ -64,14 +65,25 @@ class DataProvider:
 
     @st.cache_data(ttl=300, show_spinner=False)
     def get_latest_date(_self):
-        q = f"SELECT MAX(date) as m FROM {_self._t('agg_dashboard_daily')}"
-        df = _self.run_query(q)
-        if df.empty or pd.isna(df.iloc[0]['m']):
-            q_fallback = f"SELECT MAX(DATE(created_at)) as m FROM {_self._t('fact_orders')}"
-            df = _self.run_query(q_fallback)
-            if df.empty or pd.isna(df.iloc[0]['m']):
-                return None
-        return pd.to_datetime(df.iloc[0]['m']).date()
+        # We want the latest date across all primary data sources
+        queries = [
+            f"SELECT MAX(date) as m FROM {_self._t('agg_dashboard_daily')}",
+            f"SELECT MAX(DATE(created_at)) as m FROM {_self._t('fact_orders')}",
+            f"SELECT MAX(event_date) as m FROM {_self.table_ref('v_events_raw_dedup')}"
+        ]
+        
+        latest_dates = []
+        for q in queries:
+            try:
+                df = _self.run_query(q)
+                if not df.empty and not pd.isna(df.iloc[0]['m']):
+                    latest_dates.append(pd.to_datetime(df.iloc[0]['m']).date())
+            except Exception:
+                continue
+        
+        if not latest_dates:
+            return None
+        return max(latest_dates)
 
     def get_default_date_range(self, window_days: int = 30):
         latest = self.get_latest_date() or dt.date.today()

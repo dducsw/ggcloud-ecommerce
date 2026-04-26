@@ -11,3 +11,9 @@ python datagen/thelook-ecomm/generate_events_only.py `
   --publish-clickstream `
   --gcp-project-id "cloud-data-project-492514" `
   --clickstream-topic "clickstream_topic"
+
+
+./src/clickstream/run_clickstream_pipeline.ps1 ` -ProjectId "cloud-data-project-492514" ` -BucketName "etl-staging-0" ` -ProductLookupDataset "thelook_dwh" ` -ProductLookupTable "dim_products" 
+
+
+https://console.cloud.google.com/cloudpubsub/topic/detail/clickstream_topic?project=cloud-data-project-492514&tab=metrics&pageState=("duration":("groupValue":"PT1H","customValue":null),"nav":("section":"overview"))
