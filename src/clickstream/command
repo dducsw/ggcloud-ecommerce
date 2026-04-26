@@ -1,0 +1,13 @@
+python datagen/thelook-ecomm/generate_events_only.py `
+  --db-host localhost `
+  --db-port 5433 `
+  --db-user db_user `
+  --db-password db_password `
+  --db-name thelook_db `
+  --db-schema demo `
+  --avg-qps 20 `
+  --init-num-users 0 `
+  --max-iter -1 `
+  --publish-clickstream `
+  --gcp-project-id "cloud-data-project-492514" `
+  --clickstream-topic "clickstream_topic"

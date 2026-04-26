@@ -29,12 +29,13 @@ class EventsOnlySimulator:
         self.args = args
         self.fake = fake
         self.writer = DataWriter(
-            args.db_user,
-            args.db_password,
-            args.db_host,
-            args.db_name,
-            args.db_schema,
-            args.db_batch_size,
+            user=args.db_user,
+            password=args.db_password,
+            host=args.db_host,
+            port=args.db_port,
+            db_name=args.db_name,
+            schema=args.db_schema,
+            batch_size=args.db_batch_size,
         )
         self.user_ids = IdAllocator()
         self.event_ids = IdAllocator()
@@ -169,6 +170,7 @@ def main():
     parser.add_argument("--state", default="*", help="User state.")
     parser.add_argument("--postal-code", default="*", help="User postal code.")
     parser.add_argument("--db-host", default="localhost", help="Database host.")
+    parser.add_argument("--db-port", type=int, default=5432, help="Database port.")
     parser.add_argument("--db-user", default="db_user", help="Database user.")
     parser.add_argument("--db-password", default="db_password", help="Database password.")
     parser.add_argument("--db-name", default="fh_dev", help="Database name.")

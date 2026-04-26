@@ -37,24 +37,25 @@ def load_product_dimension_from_csv(csv_path: str) -> dict:
 
 def load_product_dimension_from_bigquery(project_id: str, dataset: str, table: str) -> dict:
     client = bigquery.Client(project=project_id)
+    # Handle both staging tables (id) and dimension tables (product_id)
     query = f"""
     SELECT
-      id,
-      category,
-      department,
-      name
+      *
     FROM `{project_id}.{dataset}.{table}`
-    WHERE id IS NOT NULL
     """
     result = client.query(query).result()
 
     product_map = {}
     for row in result:
-        product_map[int(row["id"])] = {
-            "category": row.get("category"),
-            "department": row.get("department"),
-            "name": row.get("name"),
-        }
+        row_dict = dict(row.items())
+        # Use product_id if available, otherwise id
+        pid = row_dict.get("product_id") or row_dict.get("id")
+        if pid is not None:
+            product_map[int(pid)] = {
+                "category": row_dict.get("category"),
+                "department": row_dict.get("department"),
+                "name": row_dict.get("name"),
+            }
     return product_map
 
 

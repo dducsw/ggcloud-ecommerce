@@ -1,5 +1,5 @@
-import json
 import logging
+import threading
 
 import apache_beam as beam
 from apache_beam.coders import BooleanCoder
@@ -15,6 +15,8 @@ MAX_EVENTS_PER_SESSION = 5000
 
 class ParseValidateDoFn(beam.DoFn):
     DEADLETTER_TAG = "deadletter"
+    _processed_lock = threading.Lock()
+    _total_processed = 0
 
     def __init__(self):
         self.valid_counter = Metrics.counter("clickstream", "valid_events")
@@ -64,6 +66,13 @@ class ParseValidateDoFn(beam.DoFn):
                 "ingested_at": to_timestamp_string(ingested_at),
             }
             self.valid_counter.inc()
+            
+            with ParseValidateDoFn._processed_lock:
+                ParseValidateDoFn._total_processed += 1
+                current_count = ParseValidateDoFn._total_processed
+            
+            if current_count % 10 == 0:
+                logging.info(f" >>> [Dataflow] Total records processed: {current_count}")
             yield beam.window.TimestampedValue(row, event_ts.timestamp())
         except Exception as exc:
             self.invalid_counter.inc()
