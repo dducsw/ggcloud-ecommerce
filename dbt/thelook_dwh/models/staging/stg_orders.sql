@@ -6,7 +6,7 @@ with orders_base as (
         cast(user_id as int64) as user_id,
         coalesce(cast(status as string), 'Unknown') as status,
         coalesce(cast(gender as string), 'Unknown') as gender,
-        {{ to_bq_timestamp('created_at') }} as created_at,
+        coalesce({{ to_bq_timestamp('created_at') }}, {{ to_bq_timestamp('cdc_timestamp') }}) as created_at,
         {{ to_bq_timestamp('shipped_at') }} as shipped_at,
         {{ to_bq_timestamp('delivered_at') }} as delivered_at,
         {{ to_bq_timestamp('returned_at') }} as returned_at,

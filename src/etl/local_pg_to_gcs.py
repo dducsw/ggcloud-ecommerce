@@ -218,13 +218,13 @@ def export_table_to_parquet(
 
             arrow_table = pa.Table.from_pandas(chunk, preserve_index=False)
             if parquet_writer is None:
-                parquet_writer = pq.ParquetWriter(output_path, arrow_table.schema)
+                parquet_writer = pq.ParquetWriter(output_path, arrow_table.schema, coerce_timestamps='us', allow_truncated_timestamps=True)
             parquet_writer.write_table(arrow_table)
             row_count += len(chunk)
 
     if parquet_writer is None:
         empty_table = pa.table({})
-        pq.write_table(empty_table, output_path)
+        pq.write_table(empty_table, output_path, coerce_timestamps='us', allow_truncated_timestamps=True)
     else:
         parquet_writer.close()
 

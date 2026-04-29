@@ -4,7 +4,7 @@ select
     cast(id as int64) as product_id,
     cast(cost as numeric) as cost,
     cast(category as string) as category,
-    cast(name as string) as product_name,
+    coalesce(cast(name as string), 'Unknown Product') as product_name,
     cast(brand as string) as brand,
     cast(retail_price as numeric) as retail_price,
     cast(department as string) as department,

@@ -108,7 +108,7 @@ class WriteColdParquetDoFn(beam.DoFn):
         )
 
         with FileSystems.create(output_path) as file_handle:
-            pq.write_table(arrow_table, file_handle)
+            pq.write_table(arrow_table, file_handle, coerce_timestamps='us', allow_truncated_timestamps=True)
 
         yield {
             "table": table_name,

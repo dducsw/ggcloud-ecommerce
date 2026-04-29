@@ -54,7 +54,7 @@ def get_additional_ddls(schema: str):
             CREATE TABLE IF NOT EXISTS {schema}.inventory_items (
                 id BIGINT PRIMARY KEY,
                 product_id BIGINT,
-                created_at TIMESTAMP WITHOUT TIME ZONE,
+                created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
                 sold_at TIMESTAMP WITHOUT TIME ZONE,
                 cost DOUBLE PRECISION,
                 product_category TEXT,
@@ -215,7 +215,7 @@ class User(ModelMixin):
             latitude        DOUBLE PRECISION,
             longitude       DOUBLE PRECISION,
             traffic_source  TEXT,
-            created_at      TIMESTAMP WITHOUT TIME ZONE,
+            created_at      TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
             updated_at      TIMESTAMP WITHOUT TIME ZONE,
             CONSTRAINT chk_users_age_valid
                 CHECK (age BETWEEN 12 AND 120),
@@ -308,7 +308,7 @@ class Order(ModelMixin):
             user_id         BIGINT,
             status          TEXT,
             gender          TEXT,
-            created_at      TIMESTAMP WITHOUT TIME ZONE,
+            created_at      TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
             updated_at      TIMESTAMP WITHOUT TIME ZONE,
             returned_at     TIMESTAMP WITHOUT TIME ZONE,
             shipped_at      TIMESTAMP WITHOUT TIME ZONE,
@@ -391,7 +391,7 @@ class OrderItem(ModelMixin):
             product_id          BIGINT,
             inventory_item_id   BIGINT,
             status              TEXT,
-            created_at          TIMESTAMP WITHOUT TIME ZONE,
+            created_at          TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
             updated_at          TIMESTAMP WITHOUT TIME ZONE,
             shipped_at          TIMESTAMP WITHOUT TIME ZONE,
             delivered_at        TIMESTAMP WITHOUT TIME ZONE,
@@ -584,7 +584,7 @@ class Event(ModelMixin):
             traffic_source      TEXT,
             uri                 TEXT,
             event_type          TEXT,
-            created_at          TIMESTAMP WITHOUT TIME ZONE,
+            created_at          TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
             CONSTRAINT fk_events_user
                 FOREIGN KEY (user_id)
                 REFERENCES {schema}.users (id),
