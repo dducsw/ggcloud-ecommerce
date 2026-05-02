@@ -15,6 +15,11 @@ sources:
     tables:
       - name: users
         description: "Raw user records from the source system."
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
 
       - name: products
         description: "Raw product catalog records captured via CDC."
@@ -38,6 +43,15 @@ sources:
           freshness:
             warn_after: {count: 6, period: hour}
             error_after: {count: 24, period: hour}
+        columns:
+          - name: order_id
+            tests:
+              - unique
+              - not_null
+          - name: status
+            tests:
+              - accepted_values:
+                  values: ['Processing', 'Shipped', 'Complete', 'Cancelled', 'Returned']
 
       - name: order_items
         description: "Raw order line records captured via CDC."
@@ -45,6 +59,14 @@ sources:
           freshness:
             warn_after: {count: 6, period: hour}
             error_after: {count: 24, period: hour}
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
+          - name: order_id
+            tests:
+              - not_null
 
       - name: events
         description: "Raw digital event stream."

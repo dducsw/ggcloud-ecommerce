@@ -3,6 +3,10 @@ version: 2
 models:
   - name: stg_orders
     description: "Cleaned and deduplicated order header records from the CDC source."
+    tests:
+      - dbt_expectations.expect_table_row_count_to_be_between:
+          min_value: 1
+          max_value: 1000000000
     columns:
       - name: order_id
         description: "Unique order identifier after CDC deduplication."
