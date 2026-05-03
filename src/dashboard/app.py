@@ -2,6 +2,7 @@ import datetime as dt
 import streamlit as st
 from utils.data_provider import data_provider
 from utils.theme import apply_theme, render_hero
+from utils.filters import select_time_range
 
 st.set_page_config(page_title="TheLook Ecommerce Analytics", page_icon="🛍️", layout="wide", initial_sidebar_state="expanded")
 
@@ -13,16 +14,14 @@ def build_sidebar():
     st.sidebar.markdown("### 🛍️ TheLook Analytics")
     st.sidebar.caption("Source: Gold Layer (Data Warehouse)")
     
-    date_range = st.sidebar.date_input(
-        "Date Range",
-        value=(default_start, default_end),
-        max_value=default_end,
+    range_start, range_end = select_time_range(
+        str(default_start), 
+        str(default_end), 
+        key_prefix="global"
     )
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
-    else:
-        start_date = default_start
-        end_date = default_end
+    
+    start_date = range_start.date()
+    end_date = range_end.date()
 
     st.sidebar.markdown("---")
     st.sidebar.write(f"Project: `{data_provider.project_id}`")

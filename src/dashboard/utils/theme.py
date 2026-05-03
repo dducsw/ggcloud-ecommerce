@@ -67,15 +67,11 @@ def apply_theme() -> None:
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
 
-        /* Hero Section Styling - Adapted for Light Mode */
-        .hero-card {
-            background: #ffffff;
-            border: 1px solid #d9dee7;
-            border-radius: 12px;
-            padding: 24px;
+        /* Hero Section Styling - Simplified */
+        .hero-section {
             margin-bottom: 2rem;
-            border-left: 5px solid #315f8c;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #e1e4e8;
         }
 
         .hero-wrap {
@@ -123,18 +119,8 @@ def apply_theme() -> None:
         unsafe_allow_html=True,
     )
 
-def render_hero(title: str, subtitle: str, image_url: str) -> None:
-    st.markdown(
-        f"""
-        <div class='hero-card'>
-            <div class='hero-wrap'>
-                <img class='hero-image' src='{image_url}' />
-                <div>
-                    <h1 class='hero-title'>{title}</h1>
-                    <p class='hero-subtitle'>{subtitle}</p>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def render_hero(title: str, subtitle: str, image_url: str = None) -> None:
+    st.title(title)
+    if subtitle:
+        st.markdown(f"<p class='hero-subtitle'>{subtitle}</p>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 1.5rem;'></div>", unsafe_allow_html=True)

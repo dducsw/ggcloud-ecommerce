@@ -8,73 +8,7 @@ import streamlit as st
 
 from utils.data_provider import data_provider
 from utils.theme import apply_theme
-
-
-def fmt_int(value) -> str:
-    return f"{int(value or 0):,}"
-
-
-def fmt_seconds(value) -> str:
-    if value is None or pd.isna(value):
-        return "n/a"
-    value = float(value)
-    if value < 60:
-        return f"{value:.1f}s"
-    return f"{value / 60:.1f}m"
-
-
-def render_kpi_card(column, label: str, value: str, subtitle: str) -> None:
-    column.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div style="color: #bdd0ee; font-size: 0.8rem; margin-top: 4px;">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def select_time_range(default_start: str, default_end: str) -> tuple[pd.Timestamp, pd.Timestamp]:
-    presets = {
-        "Last 5 minutes": dt.timedelta(minutes=5),
-        "Last 15 minutes": dt.timedelta(minutes=15),
-        "Last 30 minutes": dt.timedelta(minutes=30),
-        "Last 1 hour": dt.timedelta(hours=1),
-        "Last 6 hours": dt.timedelta(hours=6),
-        "Last 1 day": dt.timedelta(days=1),
-        "Custom range": None,
-    }
-    with st.sidebar:
-        st.markdown("---")
-        st.subheader("Time range")
-        selected = st.selectbox("Window", list(presets), index=5)
-
-        if selected == "Custom range":
-            start_date = st.date_input("Start date", value=pd.to_datetime(default_start).date(), key="session_start_date")
-            start_time = st.time_input("Start time", value=dt.time(0, 0), key="session_start_time")
-            end_date = st.date_input("End date", value=pd.to_datetime(default_end).date(), key="session_end_date")
-            end_time = st.time_input("End time", value=dt.time(23, 59), key="session_end_time")
-            start_ts = pd.Timestamp(dt.datetime.combine(start_date, start_time))
-            end_ts = pd.Timestamp(dt.datetime.combine(end_date, end_time))
-        else:
-            end_ts = pd.Timestamp(dt.datetime.combine(pd.to_datetime(default_end).date(), dt.time(23, 59, 59)))
-            start_ts = end_ts - presets[selected]
-
-    if start_ts >= end_ts:
-        st.warning("Start time must be before end time. Falling back to the last 1 day.")
-        end_ts = pd.Timestamp(dt.datetime.combine(pd.to_datetime(default_end).date(), dt.time(23, 59, 59)))
-        start_ts = end_ts - dt.timedelta(days=1)
-    return start_ts, end_ts
-
-
-def filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
-    if df.empty or column not in df.columns:
-        return df
-    filtered = df.copy()
-    filtered[column] = pd.to_datetime(filtered[column]).dt.tz_localize(None)
-    return filtered[(filtered[column] >= start_ts) & (filtered[column] <= end_ts)]
+from utils.filters import select_time_range, filter_by_time, fmt_int, fmt_seconds, render_kpi_card
 
 
 def build_funnel_sankey(funnel_df: pd.DataFrame) -> go.Figure:
@@ -158,7 +92,17 @@ if not active_start or not active_end:
 
 start_date = str(active_start)
 end_date = str(active_end)
-range_start, range_end = select_time_range(start_date, end_date)
+
+session_presets = {
+    "Last 1 hour": dt.timedelta(hours=1),
+    "Last 6 hours": dt.timedelta(hours=6),
+    "Last 1 day": dt.timedelta(days=1),
+    "Last 7 days": dt.timedelta(days=7),
+    "Last 30 days": dt.timedelta(days=30),
+    "Custom range": None,
+}
+
+range_start, range_end = select_time_range(start_date, end_date, key_prefix="session", presets=session_presets)
 query_start_date = str(range_start.date())
 query_end_date = str(range_end.date())
 traffic_filter: tuple[str, ...] = tuple()
@@ -190,7 +134,7 @@ def render_dashboard():
         if funnel.empty:
             st.info("No funnel data available.")
         else:
-            st.plotly_chart(build_funnel_sankey(funnel), use_container_width=True)
+            st.plotly_chart(build_funnel_sankey(funnel), width="stretch")
 
     with business_right:
         st.subheader("Business: top category interest")

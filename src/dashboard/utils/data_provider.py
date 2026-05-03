@@ -19,16 +19,18 @@ class DataProvider:
         self.client = bigquery.Client(project=self.project_id)
 
     @st.cache_data(ttl=300, show_spinner=False)
-    def run_query(_self, query: str, _params=None) -> pd.DataFrame:
+    def run_query(_self, query: str, params=None) -> pd.DataFrame:
         try:
             query_params = []
-            if _params:
+            if params:
                 # Accept both tuple and legacy list inputs while keeping cache args hash-safe.
-                if isinstance(_params, list):
-                    _params = tuple(_params)
+                if isinstance(params, list):
+                    params = tuple(params)
                 query_params = [
-                    bigquery.ScalarQueryParameter(name, param_type, value)
-                    for name, param_type, value in _params
+                    bigquery.ArrayQueryParameter(name, param_type, value)
+                    if isinstance(value, (list, tuple))
+                    else bigquery.ScalarQueryParameter(name, param_type, value)
+                    for name, param_type, value in params
                 ]
             job_config = bigquery.QueryJobConfig(
                 query_parameters=query_params,
@@ -63,6 +65,15 @@ class DataProvider:
             return ""
         sources_str = ", ".join([f"'{s}'" for s in traffic_sources])
         return f"AND {col_name} IN ({sources_str})"
+
+    def _brand_filter(self, brands, col_name="p.brand"):
+        if not brands:
+            return "", ()
+        return f"AND {col_name} IN UNNEST(@brands)", (("brands", "STRING", list(brands)),)
+
+    def _date_brand_params(self, ds, de, brands=None):
+        brand_filter, brand_params = self._brand_filter(brands)
+        return brand_filter, self._date_params(ds, de) + brand_params
 
     @st.cache_data(ttl=300, show_spinner=False)
     def get_latest_date(_self):
@@ -119,18 +130,214 @@ class DataProvider:
         return self.run_query(q, self._date_params(ds, de))
 
     def get_top_products(self, ds, de):
+        return self.get_top_products_by_brand(ds, de)
+
+    def get_top_products_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
         q = f"""
         SELECT 
             p.product_name,
             p.category,
+            p.brand,
+            p.department,
             COALESCE(SUM(oi.sale_price), 0) as revenue,
-            COALESCE(SUM(oi.profit), 0) as margin
+            COALESCE(SUM(oi.profit), 0) as margin,
+            COUNT(*) as items_sold
         FROM {self._t('fact_order_items')} oi
         JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
         WHERE {self._timestamp_filter('oi.created_at')}
-        GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15
+          {brand_filter}
+        GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC LIMIT 25
+        """
+        return self.run_query(q, params)
+
+    def get_product_brands(self, ds, de):
+        q = f"""
+        SELECT DISTINCT COALESCE(NULLIF(TRIM(p.brand), ''), 'Unknown') as brand
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+        ORDER BY brand
+        """
+        df = self.run_query(q, self._date_params(ds, de))
+        return df["brand"].dropna().tolist() if not df.empty else []
+
+    def get_order_value_distribution(self, ds, de):
+        q = f"""
+        SELECT
+            order_id,
+            total_revenue as order_value,
+            gross_margin as margin,
+            num_of_item
+        FROM {self._t('fact_orders')}
+        WHERE {self._timestamp_filter('created_at')}
+          AND total_revenue > 0
+        ORDER BY created_at DESC
+        LIMIT 5000
         """
         return self.run_query(q, self._date_params(ds, de))
+
+    def get_order_status_stats(self, ds, de):
+        q = f"""
+        SELECT 
+            status,
+            COUNT(*) as order_count
+        FROM {self._t('fact_orders')}
+        WHERE {self._timestamp_filter('created_at')}
+        GROUP BY 1 ORDER BY 2 DESC
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_order_type_stats(self, ds, de):
+        q = f"""
+        SELECT 
+            order_type,
+            COUNT(*) as order_count
+        FROM {self._t('fact_orders')}
+        WHERE {self._timestamp_filter('created_at')}
+        GROUP BY 1 ORDER BY 2 DESC
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_orders_by_city(self, ds, de):
+        q = f"""
+        SELECT 
+            u.city,
+            u.latitude,
+            u.longitude,
+            COUNT(DISTINCT o.user_id) as user_count,
+            COUNT(o.order_id) as order_count
+        FROM {self._t('fact_orders')} o
+        JOIN {self._t('dim_users')} u ON o.user_id = u.user_id
+        WHERE {self._timestamp_filter('o.created_at')}
+        GROUP BY 1, 2, 3 ORDER BY 5 DESC LIMIT 500
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_category_performance(self, ds, de):
+        return self.get_category_performance_by_brand(ds, de)
+
+    def get_category_performance_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
+        q = f"""
+        SELECT 
+            p.category,
+            COALESCE(SUM(oi.sale_price), 0) as revenue,
+            COALESCE(SUM(oi.profit), 0) as margin,
+            COUNT(DISTINCT oi.order_id) as orders
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+          {brand_filter}
+        GROUP BY 1 ORDER BY 2 DESC
+        """
+        return self.run_query(q, params)
+
+    def get_product_scatter(self, ds, de):
+        return self.get_product_scatter_by_brand(ds, de)
+
+    def get_product_scatter_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
+        q = f"""
+        SELECT 
+            p.product_name,
+            p.category,
+            p.brand,
+            p.department,
+            AVG(oi.sale_price) as avg_price,
+            SUM(oi.profit) as total_profit,
+            COUNT(*) as volume
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+          {brand_filter}
+        GROUP BY 1, 2, 3, 4
+        HAVING volume > 5
+        LIMIT 100
+        """
+        return self.run_query(q, params)
+
+    def get_brand_performance(self, ds, de):
+        return self.get_brand_performance_by_brand(ds, de)
+
+    def get_brand_performance_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
+        q = f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(p.brand), ''), 'Unknown') as brand,
+            COALESCE(SUM(oi.sale_price), 0) as revenue,
+            COALESCE(SUM(oi.profit), 0) as margin,
+            COUNT(*) as items_sold,
+            COUNT(DISTINCT oi.order_id) as orders,
+            COALESCE(SAFE_DIVIDE(SUM(oi.profit), SUM(oi.sale_price)), 0) as margin_rate
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+          {brand_filter}
+        GROUP BY 1
+        ORDER BY 2 DESC
+        LIMIT 20
+        """
+        return self.run_query(q, params)
+
+    def get_department_performance(self, ds, de):
+        return self.get_department_performance_by_brand(ds, de)
+
+    def get_department_performance_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
+        q = f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(p.department), ''), 'Unknown') as department,
+            COALESCE(SUM(oi.sale_price), 0) as revenue,
+            COALESCE(SUM(oi.profit), 0) as margin,
+            COUNT(*) as items_sold,
+            COUNT(DISTINCT oi.order_id) as orders,
+            COALESCE(SAFE_DIVIDE(SUM(oi.profit), SUM(oi.sale_price)), 0) as margin_rate
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+          {brand_filter}
+        GROUP BY 1
+        ORDER BY 2 DESC
+        """
+        return self.run_query(q, params)
+
+    def get_brand_trend(self, ds, de):
+        return self.get_brand_trend_by_brand(ds, de)
+
+    def get_brand_trend_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
+        q = f"""
+        SELECT
+            DATE(oi.created_at) as date,
+            COALESCE(NULLIF(TRIM(p.brand), ''), 'Unknown') as brand,
+            SUM(oi.sale_price) as revenue
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+          {brand_filter}
+        GROUP BY 1, 2
+        ORDER BY 1
+        """
+        return self.run_query(q, params)
+
+    def get_category_trend(self, ds, de):
+        return self.get_category_trend_by_brand(ds, de)
+
+    def get_category_trend_by_brand(self, ds, de, brands=None):
+        brand_filter, params = self._date_brand_params(ds, de, brands)
+        q = f"""
+        SELECT 
+            DATE(oi.created_at) as date,
+            p.category,
+            SUM(oi.sale_price) as revenue
+        FROM {self._t('fact_order_items')} oi
+        JOIN {self._t('dim_products')} p ON oi.product_id = p.product_id
+        WHERE {self._timestamp_filter('oi.created_at')}
+          {brand_filter}
+        GROUP BY 1, 2 ORDER BY 1
+        """
+        return self.run_query(q, params)
 
     # --- 02 Marketing & Audience ---
     def get_marketing_kpis(self, ds, de):
@@ -228,16 +435,144 @@ class DataProvider:
         params = self._date_params(ds, de)
         return self.run_query(q1, params), self.run_query(q2, params)
 
-    def get_inventory_status(self):
+    def get_inventory_status(self, ds=None, de=None):
         q = f"""
         SELECT 
-            CASE WHEN is_sold THEN 'Sold' ELSE 'In Stock' END as status,
+            inventory_status as status,
             COUNT(*) as item_count,
-            AVG(days_in_inventory) as avg_days_in_inv
-        FROM {self._t('dim_inventory')}
+            COALESCE(SUM(cost), 0) as inventory_cost,
+            AVG(
+                CASE
+                    WHEN is_sold THEN days_in_inventory
+                    ELSE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY)
+                END
+            ) as avg_days_in_inv
+        FROM {self._t('fact_inventory')}
+        WHERE created_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+          AND (sold_at IS NULL OR sold_at >= TIMESTAMP(@start_date))
         GROUP BY 1
         """
-        return self.run_query(q)
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_inventory_kpis(self, ds, de):
+        q = f"""
+        SELECT
+            COUNT(*) as inventory_items,
+            COUNTIF(NOT is_sold) as available_items,
+            COUNTIF(inventory_status = 'Slow-Moving') as slow_moving_items,
+            COUNTIF(is_sold) as sold_items,
+            COALESCE(SUM(IF(NOT is_sold, cost, 0)), 0) as available_cost,
+            COALESCE(AVG(IF(NOT is_sold, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY), NULL)), 0) as avg_available_age_days,
+            COALESCE(AVG(days_in_inventory), 0) as avg_sold_days_in_inventory,
+            COALESCE(SAFE_DIVIDE(COUNTIF(is_sold), COUNT(*)), 0) as sell_through_rate
+        FROM {self._t('fact_inventory')}
+        WHERE created_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+          AND (sold_at IS NULL OR sold_at >= TIMESTAMP(@start_date))
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_inventory_age_buckets(self, ds, de):
+        q = f"""
+        WITH base AS (
+            SELECT
+                CASE
+                    WHEN is_sold THEN days_in_inventory
+                    ELSE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), created_at, DAY)
+                END as age_days,
+                cost
+            FROM {self._t('fact_inventory')}
+            WHERE created_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+              AND (sold_at IS NULL OR sold_at >= TIMESTAMP(@start_date))
+        )
+        SELECT
+            CASE
+                WHEN age_days < 30 THEN '0-29 days'
+                WHEN age_days < 60 THEN '30-59 days'
+                WHEN age_days < 90 THEN '60-89 days'
+                WHEN age_days < 180 THEN '90-179 days'
+                ELSE '180+ days'
+            END as age_bucket,
+            CASE
+                WHEN age_days < 30 THEN 1
+                WHEN age_days < 60 THEN 2
+                WHEN age_days < 90 THEN 3
+                WHEN age_days < 180 THEN 4
+                ELSE 5
+            END as bucket_order,
+            COUNT(*) as item_count,
+            COALESCE(SUM(cost), 0) as inventory_cost
+        FROM base
+        GROUP BY 1, 2
+        ORDER BY 2
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_inventory_by_distribution_center(self, ds, de):
+        q = f"""
+        SELECT
+            dc.distribution_center_name,
+            dc.latitude,
+            dc.longitude,
+            COUNT(*) as item_count,
+            COUNTIF(NOT inv.is_sold) as available_items,
+            COUNTIF(inv.inventory_status = 'Slow-Moving') as slow_moving_items,
+            COALESCE(SUM(IF(NOT inv.is_sold, inv.cost, 0)), 0) as available_cost
+        FROM {self._t('fact_inventory')} inv
+        LEFT JOIN {self._t('dim_distribution_centers')} dc
+          ON inv.distribution_center_id = dc.distribution_center_id
+        WHERE inv.created_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+          AND (inv.sold_at IS NULL OR inv.sold_at >= TIMESTAMP(@start_date))
+        GROUP BY 1, 2, 3
+        ORDER BY 4 DESC
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_inventory_by_product_segment(self, ds, de):
+        q = f"""
+        SELECT
+            p.category,
+            p.department,
+            COUNT(*) as item_count,
+            COUNTIF(NOT inv.is_sold) as available_items,
+            COUNTIF(inv.inventory_status = 'Slow-Moving') as slow_moving_items,
+            COALESCE(SUM(IF(NOT inv.is_sold, inv.cost, 0)), 0) as available_cost
+        FROM {self._t('fact_inventory')} inv
+        LEFT JOIN {self._t('dim_products')} p
+          ON inv.product_id = p.product_id
+        WHERE inv.created_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+          AND (inv.sold_at IS NULL OR inv.sold_at >= TIMESTAMP(@start_date))
+        GROUP BY 1, 2
+        ORDER BY 4 DESC
+        LIMIT 20
+        """
+        return self.run_query(q, self._date_params(ds, de))
+
+    def get_inventory_flow(self, ds, de):
+        q = f"""
+        WITH created AS (
+            SELECT DATE(created_at) as date, COUNT(*) as created_items
+            FROM {self._t('fact_inventory')}
+            WHERE created_at >= TIMESTAMP(@start_date)
+              AND created_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+            GROUP BY 1
+        ),
+        sold AS (
+            SELECT DATE(sold_at) as date, COUNT(*) as sold_items
+            FROM {self._t('fact_inventory')}
+            WHERE sold_at >= TIMESTAMP(@start_date)
+              AND sold_at < TIMESTAMP(DATE_ADD(@end_date, INTERVAL 1 DAY))
+            GROUP BY 1
+        )
+        SELECT
+            COALESCE(created.date, sold.date) as date,
+            COALESCE(created.created_items, 0) as created_items,
+            COALESCE(sold.sold_items, 0) as sold_items
+        FROM created
+        FULL OUTER JOIN sold
+          ON created.date = sold.date
+        ORDER BY 1
+        """
+        return self.run_query(q, self._date_params(ds, de))
 
     def get_delivery_histogram(self, ds, de):
         q = f"""
@@ -905,7 +1240,6 @@ class DataProvider:
         """
         return self.run_query(query)
 
-@st.cache_resource(show_spinner=False)
 def get_data_provider() -> DataProvider:
     return DataProvider()
 
