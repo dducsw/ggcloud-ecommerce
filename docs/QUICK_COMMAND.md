@@ -59,7 +59,7 @@ Chờ 5-7 phút để cold path flush Parquet ra GCS.
 
 Hot path events:
 
-bq --project_id=cloud-data-project-492514 query --use_legacy_sql=false "SELECT COUNT(*) AS c FROM `cloud-data-project-492514.thelook_staging.events`"
+bq --project_id=cloud-data-project-492514 query --use_legacy_sql=false 'SELECT COUNT(*) AS c FROM `cloud-data-project-492514.thelook_staging.events`'
 Cold path GCS:
 
 gcloud storage ls gs://etl-staging-0/raw/ --recursive

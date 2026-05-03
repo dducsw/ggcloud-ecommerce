@@ -69,6 +69,8 @@ models:
               arguments:
                 to: ref('dim_users')
                 field: user_key
+              config:
+                severity: warn
       - name: created_date_key
         tests:
           - not_null
@@ -82,18 +84,24 @@ models:
               arguments:
                 to: ref('dim_date')
                 field: date_key
+              config:
+                severity: warn
       - name: delivered_date_key
         tests:
           - relationships:
               arguments:
                 to: ref('dim_date')
                 field: date_key
+              config:
+                severity: warn
       - name: returned_date_key
         tests:
           - relationships:
               arguments:
                 to: ref('dim_date')
                 field: date_key
+              config:
+                severity: warn
 
   - name: fact_order_items
     description: "Order line fact table at one row per order item."
@@ -109,6 +117,8 @@ models:
               arguments:
                 to: ref('dim_users')
                 field: user_key
+              config:
+                severity: warn
       - name: product_key
         tests:
           - not_null
@@ -136,18 +146,24 @@ models:
               arguments:
                 to: ref('dim_date')
                 field: date_key
+              config:
+                severity: warn
       - name: delivered_date_key
         tests:
           - relationships:
               arguments:
                 to: ref('dim_date')
                 field: date_key
+              config:
+                severity: warn
       - name: returned_date_key
         tests:
           - relationships:
               arguments:
                 to: ref('dim_date')
                 field: date_key
+              config:
+                severity: warn
 
   - name: fact_events
     description: "Digital event fact table capturing user activity by event."

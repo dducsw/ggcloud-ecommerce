@@ -39,12 +39,11 @@ inventory_base as (
     left join {{ ref('dim_distribution_centers') }} dc
       on i.product_distribution_center_id = dc.distribution_center_id
     {% if is_incremental() %}
-    where i.created_at >= (
-        select coalesce(max(created_at), timestamp('1970-01-01'))
-        from {{ this }}
-    )
-    or i.sold_at >= (
-        select coalesce(max(created_at), timestamp('1970-01-01'))
+    where coalesce(i.sold_at, i.created_at) >= (
+        select timestamp_sub(
+            coalesce(max(source_updated_at), timestamp('1970-01-01')),
+            interval 3 day
+        )
         from {{ this }}
     )
     {% endif %}
