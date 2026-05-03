@@ -262,6 +262,7 @@ class Order(ModelMixin):
 
     def update_status(self, fake: Faker, return_probability: float = 0.02) -> Self:
         status_changed = False
+        status_timestamp = None
 
         if self.status == OrderStatus.PROCESSING.value:
             # Transition from Processing to either Shipped or Cancelled
@@ -275,27 +276,43 @@ class Order(ModelMixin):
             )
             if new_status == OrderStatus.SHIPPED.value:
                 self.status = OrderStatus.SHIPPED.value
-                self.shipped_at = datetime.datetime.now()
+                shipped_at = datetime.datetime.now()
+                if shipped_at < self.created_at:
+                    shipped_at = self.created_at + datetime.timedelta(microseconds=1)
+                self.shipped_at = shipped_at
+                status_timestamp = shipped_at
             else:
                 self.status = OrderStatus.CANCELLED.value
                 # Note: CSV data doesn't have cancelled_at field
+                status_timestamp = datetime.datetime.now()
             status_changed = True
 
         elif self.status == OrderStatus.SHIPPED.value:
             # Deterministic transition from Shipped to Complete.
             self.status = OrderStatus.COMPLETE.value
-            self.delivered_at = datetime.datetime.now()
+            delivered_at = datetime.datetime.now()
+            if self.shipped_at and delivered_at < self.shipped_at:
+                delivered_at = self.shipped_at + datetime.timedelta(microseconds=1)
+            self.delivered_at = delivered_at
+            status_timestamp = delivered_at
             status_changed = True
 
         elif self.status == OrderStatus.COMPLETE.value:
             # Probabilistic transition from Complete to Returned
             if random.random() < return_probability:
                 self.status = OrderStatus.RETURNED.value
-                self.returned_at = datetime.datetime.now()
+                returned_at = datetime.datetime.now()
+                if self.delivered_at and returned_at < self.delivered_at:
+                    returned_at = self.delivered_at + datetime.timedelta(microseconds=1)
+                self.returned_at = returned_at
+                status_timestamp = returned_at
                 status_changed = True
 
         if status_changed:
-            self.updated_at = datetime.datetime.now()
+            updated_at = datetime.datetime.now()
+            if status_timestamp and updated_at < status_timestamp:
+                updated_at = status_timestamp
+            self.updated_at = updated_at
 
         return self
 
