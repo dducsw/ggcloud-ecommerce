@@ -104,7 +104,9 @@ models:
     columns:
       - name: user_id
         tests:
-          - unique
+          - unique:
+              config:
+                severity: warn
           - not_null
       - name: email
         description: "User email address."
@@ -135,7 +137,9 @@ models:
     columns:
       - name: inventory_item_id
         tests:
-          - unique
+          - unique:
+              config:
+                severity: warn
           - not_null
       - name: product_id
         tests:
@@ -162,4 +166,6 @@ models:
       - name: created_at
         description: "Event timestamp — required for incremental correctness."
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn

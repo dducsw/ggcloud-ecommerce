@@ -13,7 +13,9 @@ with order_items_base as (
         {{ to_bq_timestamp('delivered_at') }} as delivered_at,
         {{ to_bq_timestamp('returned_at') }} as returned_at,
         cast(sale_price as numeric) as sale_price,
-        cast(cdc_timestamp as int64) as cdc_timestamp,
+        unix_micros(
+            safe_cast(safe_cast(cdc_timestamp as string) as timestamp)
+        ) as cdc_timestamp,
         cast(cdc_operation as string) as cdc_operation
     from {{ source('thelook_ecommerce', 'order_items') }}
     where cast(id as int64) is not null

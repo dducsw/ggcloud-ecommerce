@@ -19,6 +19,16 @@ with users_base as (
         u.created_at,
         u.updated_at as source_updated_at
     from {{ ref('stg_users') }} u
+),
+-- Dedup CDC: giữ bản ghi mới nhất theo updated_at
+users_deduped as (
+    select
+        *,
+        row_number() over (
+            partition by user_id
+            order by source_updated_at desc nulls last
+        ) as rn
+    from users_base
 )
 
 select
@@ -46,7 +56,8 @@ select
     created_at,
     source_updated_at,
     current_timestamp() as dwh_updated_at
-from users_base
+from users_deduped
+where rn = 1
 
 union all
 

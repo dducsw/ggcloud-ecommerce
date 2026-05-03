@@ -2,6 +2,7 @@
   config(
     materialized='incremental',
     unique_key='inventory_item_id',
+    incremental_strategy='merge',
     partition_by={
       'field': 'created_at',
       'data_type': 'timestamp'
@@ -9,7 +10,19 @@
   )
 }}
 
-with inventory_base as (
+with inventory_deduped as (
+    -- Dedup trước khi join để MERGE không gặp lỗi nhiều source row cho 1 target key
+    select *
+    from (
+        select
+            *,
+            row_number() over (partition by inventory_item_id order by cdc_timestamp desc) as rn
+        from {{ ref('stg_inventory_items') }}
+    )
+    where rn = 1
+),
+
+inventory_base as (
     select
         i.inventory_item_id,
         coalesce(p.product_key, {{ generate_surrogate_key(['-1']) }}) as product_key,
@@ -20,7 +33,7 @@ with inventory_base as (
         i.sold_at,
         i.cost,
         coalesce(i.sold_at, i.created_at) as source_updated_at
-    from {{ ref('stg_inventory_items') }} i
+    from inventory_deduped i
     left join {{ ref('dim_products') }} p
       on i.product_id = p.product_id
     left join {{ ref('dim_distribution_centers') }} dc
