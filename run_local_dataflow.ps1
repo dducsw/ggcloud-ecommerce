@@ -14,6 +14,7 @@ python src/dataflow/beam_router.py `
   --pubsub_subscription projects/$PROJECT_ID/subscriptions/thelook-cdc-events-sub `
   --events_subscription projects/$PROJECT_ID/subscriptions/thelook_clickstream_events-sub `
   --bronze_dataset $DATASET `
-  --gcs_output_prefix $BUCKET/raw
+  --gcs_output_prefix $BUCKET/raw `
+  --allow_unsafe_triggers
 
 Write-Host " Đã đóng Dataflow Router." -ForegroundColor Green

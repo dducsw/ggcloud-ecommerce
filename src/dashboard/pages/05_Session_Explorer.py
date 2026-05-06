@@ -102,7 +102,17 @@ session_presets = {
     "Custom range": None,
 }
 
-range_start, range_end = select_time_range(start_date, end_date, key_prefix="session", presets=session_presets)
+range_presets = session_presets.copy()
+latest_ts = data_provider.get_latest_session_timestamp()
+
+range_start, range_end = select_time_range(
+    start_date, 
+    end_date, 
+    key_prefix="session", 
+    presets=range_presets, 
+    reference_time=latest_ts,
+    default_index=2 # Default to Last 1 day
+)
 query_start_date = str(range_start.date())
 query_end_date = str(range_end.date())
 traffic_filter: tuple[str, ...] = tuple()
@@ -114,9 +124,9 @@ def render_dashboard():
     summary = data["summary"]
     funnel = data["funnel"]
     categories = data["categories"]
-    session_trend = filter_by_time(data["session_trend"], "session_hour", range_start, range_end)
+    session_trend = filter_by_time(data["session_trend"], "session_hour", range_start, range_end, freq="1H")
     health = data["health"]
-    timeseries = filter_by_time(data["timeseries"], "session_hour", range_start, range_end)
+    timeseries = filter_by_time(data["timeseries"], "session_hour", range_start, range_end, freq="1H")
     anomalies = data["anomalies"]
 
     if not session_trend.empty:
@@ -130,27 +140,26 @@ def render_dashboard():
 
     business_left, business_right = st.columns(2)
     with business_left:
-        st.subheader("Session Funnel")
+        st.subheader("Business: session funnel")
         if funnel.empty:
             st.info("No funnel data available.")
         else:
             st.plotly_chart(build_funnel_sankey(funnel), width="stretch")
 
     with business_right:
-        st.subheader("Top Category Interest")
+        st.subheader("Business: top category interest")
         if categories.empty:
             st.info("No category data available.")
         else:
             category_chart = (
                 alt.Chart(categories.head(10))
-                .mark_bar()
+                .mark_arc(innerRadius=60, outerRadius=110)
                 .encode(
-                    x=alt.X("sessions:Q", title="Sessions"),
-                    y=alt.Y("top_category:N", sort="-x", title=None),
+                    theta=alt.Theta("sessions:Q"),
                     color=alt.Color(
-                        "conversion_rate:Q",
-                        title="Purchase/session",
-                        scale=alt.Scale(range=["#8db5d9", "#c96a50"]),
+                        "top_category:N",
+                        title="Category",
+                        scale=alt.Scale(scheme="tableau10"),
                     ),
                     tooltip=[
                         alt.Tooltip("top_category:N", title="Category"),
@@ -163,39 +172,26 @@ def render_dashboard():
             )
             st.altair_chart(category_chart, width="stretch")
 
-    st.subheader("Session and Purchase Trend")
+    st.subheader("Business: sessions and purchases over time")
     if session_trend.empty:
         st.info("No session trend data available.")
     else:
-        trend_long = session_trend.melt(
-            id_vars=["session_hour"],
-            value_vars=["sessions", "purchased_sessions"],
-            var_name="metric",
-            value_name="value",
+        base = alt.Chart(session_trend).encode(x=alt.X("session_hour:T", title=None))
+        session_line = base.mark_line(color="#315f8c", strokeWidth=2.4).encode(
+            y=alt.Y("sessions:Q", title="Sessions"),
+            tooltip=[
+                alt.Tooltip("session_hour:T", title="Hour"),
+                alt.Tooltip("sessions:Q", title="Sessions", format=",.0f"),
+                alt.Tooltip("purchased_sessions:Q", title="Purchased sessions", format=",.0f"),
+            ],
         )
-        trend_chart = (
-            alt.Chart(trend_long)
-            .mark_line(strokeWidth=2.3)
-            .encode(
-                x=alt.X("session_hour:T", title=None),
-                y=alt.Y("value:Q", title="Sessions"),
-                color=alt.Color(
-                    "metric:N",
-                    title="Metric",
-                    scale=alt.Scale(
-                        domain=["sessions", "purchased_sessions"],
-                        range=["#315f8c", "#d36c42"],
-                    ),
-                ),
-                tooltip=[
-                    alt.Tooltip("session_hour:T", title="Hour"),
-                    alt.Tooltip("metric:N", title="Metric"),
-                    alt.Tooltip("value:Q", title="Sessions", format=",.0f"),
-                ],
-            )
-            .properties(height=260)
+        purchase_line = base.mark_line(color="#d36c42", strokeWidth=2.2).encode(
+            y=alt.Y("purchased_sessions:Q", title="Purchased sessions")
         )
-        st.altair_chart(trend_chart, width="stretch")
+        st.altair_chart(
+            alt.layer(session_line, purchase_line).resolve_scale(y="independent").properties(height=260),
+            width="stretch",
+        )
 
     ops_cols = st.columns(4)
     render_kpi_card(ops_cols[0], "Session freshness", fmt_seconds(health.get("session_freshness_seconds")), "Latest processed_at")
@@ -205,7 +201,7 @@ def render_dashboard():
 
     ops_left, ops_right = st.columns(2)
     with ops_left:
-        st.subheader("Sessionization Output Trend")
+        st.subheader("Ops: sessionization output")
         if timeseries.empty:
             st.info("No sessionization data available.")
         else:
@@ -225,7 +221,7 @@ def render_dashboard():
             st.altair_chart(alt.layer(sessions, avg_events).resolve_scale(y="independent").properties(height=280), width="stretch")
 
     with ops_right:
-        st.subheader("Session Quality Snapshot")
+        st.subheader("Ops: session quality checks")
         if anomalies.empty:
             st.info("No anomaly data available.")
         else:

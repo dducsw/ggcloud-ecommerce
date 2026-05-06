@@ -44,7 +44,9 @@ EXPORT_TABLES: list[ExportTable] = [
                 longitude,
                 traffic_source,
                 created_at,
-                updated_at
+                updated_at,
+                :cdc_timestamp as cdc_timestamp,
+                'r' as cdc_operation
             from {schema}.users
         """,
     ),
@@ -62,7 +64,8 @@ EXPORT_TABLES: list[ExportTable] = [
                 department,
                 sku,
                 distribution_center_id,
-                :cdc_timestamp as cdc_timestamp
+                :cdc_timestamp as cdc_timestamp,
+                'r' as cdc_operation
             from {schema}.products
         """,
     ),
@@ -74,7 +77,9 @@ EXPORT_TABLES: list[ExportTable] = [
                 id,
                 name,
                 latitude,
-                longitude
+                longitude,
+                :cdc_timestamp as cdc_timestamp,
+                'r' as cdc_operation
             from {schema}.distribution_centers
         """,
     ),
@@ -94,7 +99,9 @@ EXPORT_TABLES: list[ExportTable] = [
                 product_retail_price,
                 product_department,
                 product_sku,
-                product_distribution_center_id
+                product_distribution_center_id,
+                :cdc_timestamp as cdc_timestamp,
+                'r' as cdc_operation
             from {schema}.inventory_items
         """,
     ),
@@ -202,13 +209,13 @@ def export_table_to_parquet(
 ) -> int:
     row_count = 0
     parquet_writer = None
-    query = text(table.query_template.format(schema=pg_schema))
+    query_str = table.query_template.format(schema=pg_schema).replace(":cdc_timestamp", str(cdc_timestamp))
 
-    with engine.connect() as conn:
+    conn = engine.raw_connection()
+    try:
         chunk_iter = pd.read_sql_query(
-            sql=query,
+            sql=query_str,
             con=conn,
-            params={"cdc_timestamp": cdc_timestamp},
             chunksize=chunk_size,
         )
 
@@ -221,6 +228,8 @@ def export_table_to_parquet(
                 parquet_writer = pq.ParquetWriter(output_path, arrow_table.schema, coerce_timestamps='us', allow_truncated_timestamps=True)
             parquet_writer.write_table(arrow_table)
             row_count += len(chunk)
+    finally:
+        conn.close()
 
     if parquet_writer is None:
         empty_table = pa.table({})
