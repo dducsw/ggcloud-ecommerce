@@ -17,6 +17,13 @@ logging.basicConfig(
 
 
 PRODUCT_MAP = get_product_map("products.csv")
+CLICKSTREAM_HOME_VIEW_RATE = 0.85
+CLICKSTREAM_DEPARTMENT_VIEW_RATE = 0.55
+CLICKSTREAM_CATEGORY_VIEW_RATE = 0.45
+CLICKSTREAM_SECOND_PRODUCT_VIEW_RATE = 0.35
+CLICKSTREAM_THIRD_PRODUCT_VIEW_RATE = 0.15
+CLICKSTREAM_ADD_TO_CART_RATE = 0.12
+CLICKSTREAM_PURCHASE_AFTER_CART_RATE = 0.30
 
 
 def get_additional_ddls(schema: str):
@@ -262,6 +269,7 @@ class Order(ModelMixin):
 
     def update_status(self, fake: Faker, return_probability: float = 0.02) -> Self:
         status_changed = False
+        status_timestamp = None
 
         if self.status == OrderStatus.PROCESSING.value:
             # Transition from Processing to either Shipped or Cancelled
@@ -275,27 +283,43 @@ class Order(ModelMixin):
             )
             if new_status == OrderStatus.SHIPPED.value:
                 self.status = OrderStatus.SHIPPED.value
-                self.shipped_at = datetime.datetime.now()
+                shipped_at = datetime.datetime.now()
+                if shipped_at < self.created_at:
+                    shipped_at = self.created_at + datetime.timedelta(microseconds=1)
+                self.shipped_at = shipped_at
+                status_timestamp = shipped_at
             else:
                 self.status = OrderStatus.CANCELLED.value
                 # Note: CSV data doesn't have cancelled_at field
+                status_timestamp = datetime.datetime.now()
             status_changed = True
 
         elif self.status == OrderStatus.SHIPPED.value:
             # Deterministic transition from Shipped to Complete.
             self.status = OrderStatus.COMPLETE.value
-            self.delivered_at = datetime.datetime.now()
+            delivered_at = datetime.datetime.now()
+            if self.shipped_at and delivered_at < self.shipped_at:
+                delivered_at = self.shipped_at + datetime.timedelta(microseconds=1)
+            self.delivered_at = delivered_at
+            status_timestamp = delivered_at
             status_changed = True
 
         elif self.status == OrderStatus.COMPLETE.value:
             # Probabilistic transition from Complete to Returned
             if random.random() < return_probability:
                 self.status = OrderStatus.RETURNED.value
-                self.returned_at = datetime.datetime.now()
+                returned_at = datetime.datetime.now()
+                if self.delivered_at and returned_at < self.delivered_at:
+                    returned_at = self.delivered_at + datetime.timedelta(microseconds=1)
+                self.returned_at = returned_at
+                status_timestamp = returned_at
                 status_changed = True
 
         if status_changed:
-            self.updated_at = datetime.datetime.now()
+            updated_at = datetime.datetime.now()
+            if status_timestamp and updated_at < status_timestamp:
+                updated_at = status_timestamp
+            self.updated_at = updated_at
 
         return self
 
@@ -480,18 +504,7 @@ class Event(ModelMixin):
             product_id = fake.random_element(PRODUCT_MAP.keys())
             order_item_id = None
             created_at = datetime.datetime.now()
-            event_types = fake.random_elements(
-                [
-                    "home",
-                    "department",
-                    "category",
-                    "product",
-                    "cancel",
-                    "purchase",
-                    "return",
-                ],
-                length=fake.random_element(range(3, 7)),
-            )
+            event_types = Event._generate_browsing_event_types()
         else:
             raise RuntimeError(
                 f"Unsupported event category: '{event_category}'. Allowed categories are: {', '.join(sorted(['purchase', 'cancel', 'ghost']))}."
@@ -536,6 +549,30 @@ class Event(ModelMixin):
             for idx, event_type in enumerate(event_types)
         ]
         return events
+
+    @staticmethod
+    def _generate_browsing_event_types() -> list[str]:
+        event_types = []
+        if random.random() < CLICKSTREAM_HOME_VIEW_RATE:
+            event_types.append("home")
+        if random.random() < CLICKSTREAM_DEPARTMENT_VIEW_RATE:
+            event_types.append("department")
+        if random.random() < CLICKSTREAM_CATEGORY_VIEW_RATE:
+            event_types.append("category")
+
+        product_view_count = 1
+        if random.random() < CLICKSTREAM_SECOND_PRODUCT_VIEW_RATE:
+            product_view_count += 1
+        if random.random() < CLICKSTREAM_THIRD_PRODUCT_VIEW_RATE:
+            product_view_count += 1
+        event_types.extend(["product"] * product_view_count)
+
+        if random.random() < CLICKSTREAM_ADD_TO_CART_RATE:
+            event_types.append("cart")
+            if random.random() < CLICKSTREAM_PURCHASE_AFTER_CART_RATE:
+                event_types.append("purchase")
+
+        return event_types
 
     def __str__(self):
         return f"Event(id={self.id}, is_ghost={self.user_id is None}, sequence_number={self.sequence_number}, event_type={self.event_type}, created_at={self.created_at})"

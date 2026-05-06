@@ -46,6 +46,8 @@ Dự án sử dụng **Remote Backend (GCS)**, vì vậy tất cả thành viên
 cd infra/terraform
 
 # Khởi tạo (Terraform sẽ tự kết nối tới GCS)
+# Lưu ý: nếu đang dùng `GOOGLE_APPLICATION_CREDENTIALS` cho Debezium,
+# hãy bỏ biến đó ra hoặc dùng một đường dẫn tuyệt đối trước khi chạy `terraform init`.
 terraform init
 
 # Kiểm tra thay đổi

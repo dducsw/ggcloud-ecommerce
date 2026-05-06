@@ -7,6 +7,9 @@ param(
   [string]$Table = "events_raw",
   [string]$ProductLookupDataset = "thelook_dwh",
   [string]$ProductLookupTable = "dim_products",
+  [int]$DirectNumWorkers = 4,
+  [ValidateSet("in_memory", "multi_threading", "multi_processing")]
+  [string]$DirectRunningMode = "multi_threading",
   [int]$DedupTtlMinutes = 60,
   [int]$SessionGapMinutes = 30,
   [int]$AllowedLatenessSeconds = 600,
@@ -21,6 +24,11 @@ if (-not $ProjectId) { throw "ProjectId is required. Set GCP_PROJECT_ID or pass 
 if (-not $Region) { $Region = "asia-southeast1" }
 if (-not $BucketName) { throw "BucketName is required. Set GCS_BUCKET_NAME or pass -BucketName." }
 
+$BucketUri = $BucketName
+if (-not $BucketUri.StartsWith("gs://")) {
+  $BucketUri = "gs://$BucketUri"
+}
+
 # Tự động tạo Subscription string nếu người dùng không truyền vào
 if (-not $Subscription) {
     $Subscription = "projects/$ProjectId/subscriptions/clickstream_topic-sub"
@@ -33,12 +41,15 @@ if ($Init) {
 }
 
 $env:PYTHONPATH = "."
+Write-Host "Starting local Beam DirectRunner pipeline..." -ForegroundColor Cyan
+Write-Host "DirectRunner mode: $DirectRunningMode, workers: $DirectNumWorkers" -ForegroundColor DarkCyan
+
 python src/clickstream/dataflow_job.py `
   --project $ProjectId `
   --region $Region `
   --runner DirectRunner `
-  --temp_location "gs://$BucketName/dataflow/tmp" `
-  --staging_location "gs://$BucketName/dataflow/staging" `
+  --temp_location "$BucketUri/dataflow/tmp" `
+  --staging_location "$BucketUri/dataflow/staging" `
   --events_subscription $Subscription `
   --dataset $Dataset `
   --raw_table $Table `
@@ -48,4 +59,6 @@ python src/clickstream/dataflow_job.py `
   --session_gap_minutes $SessionGapMinutes `
   --allowed_lateness_seconds $AllowedLatenessSeconds `
   --early_firing_delay_seconds $EarlyFiringDelaySeconds `
-  --late_firing_count $LateFiringCount
+  --late_firing_count $LateFiringCount `
+  --direct_running_mode $DirectRunningMode `
+  --direct_num_workers $DirectNumWorkers

@@ -12,7 +12,7 @@ with orders_base as (
         {{ to_bq_timestamp('returned_at') }} as returned_at,
         cast(num_of_item as int64) as num_of_item,
         -- CDC metadata: dùng để dedup và incremental
-        cast(cdc_timestamp as int64) as cdc_timestamp,
+        {{ to_cdc_timestamp('cdc_timestamp') }} as cdc_timestamp,
         cast(cdc_operation as string) as cdc_operation
     from {{ source('thelook_ecommerce', 'orders') }}
         where cast(order_id as int64) is not null

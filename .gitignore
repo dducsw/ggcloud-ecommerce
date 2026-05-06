@@ -1,7 +1,6 @@
 credentials/*
 .env
 .venv/*
-venv/
 .vscode/*
 data/*.csv
 dwh/*.csv
@@ -23,5 +22,5 @@ datagen/data/*
 
 # DBT
 dbt/thelook_dwh/target
-google-cloud-sdk/
-y/google-cloud-sdk/
+report
+scratch

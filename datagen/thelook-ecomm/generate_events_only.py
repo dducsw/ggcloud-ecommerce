@@ -4,6 +4,7 @@ import logging
 import random
 import re
 import sys
+import time
 from pathlib import Path
 
 from faker import Faker
@@ -40,10 +41,14 @@ class EventsOnlySimulator:
         self.user_ids = IdAllocator()
         self.event_ids = IdAllocator()
         self.clickstream_publisher = None
+        self.generated_events = 0
+        self.published_events = 0
+        self.started_at = time.monotonic()
         if args.publish_clickstream:
             self.clickstream_publisher = ClickstreamEventPublisher(
                 project_id=args.gcp_project_id,
                 topic_name=args.clickstream_topic,
+                publish_timeout=args.publish_timeout,
             )
 
     async def initialize(self):
@@ -80,8 +85,8 @@ class EventsOnlySimulator:
     async def _publish_if_needed(self, events):
         if not self.clickstream_publisher:
             return
-        for event in events:
-            await asyncio.to_thread(self.clickstream_publisher.publish, event)
+        published_count = await asyncio.to_thread(self.clickstream_publisher.publish_batch, events)
+        self.published_events += published_count
 
     async def _generate_user_session(self):
         user_rows = await asyncio.to_thread(
@@ -95,8 +100,6 @@ class EventsOnlySimulator:
         events = Event.new(user=user, order_item=None, event_category=EventCategory.GHOST.value, fake=self.fake)
         for event in events:
             event.id = self.event_ids.allocate()
-            if event.event_type in {"purchase", "cancel", "return"}:
-                event.event_type = "product"
             if event.event_type == "product" and not re.match(r"^/product/\d+$", event.uri):
                 product_id = random.choice(list(PRODUCT_MAP.keys()))
                 event.uri = f"/product/{product_id}"
@@ -104,6 +107,7 @@ class EventsOnlySimulator:
         await asyncio.to_thread(
             self.writer.upsert, table="events", data=events, conflict_keys=["id"]
         )
+        self.generated_events += len(events)
         await self._publish_if_needed(events)
 
     async def _generate_ghost_session(self):
@@ -115,15 +119,31 @@ class EventsOnlySimulator:
         )
         for event in events:
             event.id = self.event_ids.allocate()
-            if event.event_type in {"purchase", "cancel", "return"}:
-                event.event_type = "product"
             if event.event_type == "product" and not re.match(r"^/product/\d+$", event.uri):
                 product_id = random.choice(list(PRODUCT_MAP.keys()))
                 event.uri = f"/product/{product_id}"
         await asyncio.to_thread(
             self.writer.upsert, table="events", data=events, conflict_keys=["id"]
         )
+        self.generated_events += len(events)
         await self._publish_if_needed(events)
+
+    def _log_progress_if_needed(self, current_iteration: int):
+        if (
+            self.args.log_every_n_sessions <= 0
+            or current_iteration == 0
+            or current_iteration % self.args.log_every_n_sessions != 0
+        ):
+            return
+
+        elapsed = max(time.monotonic() - self.started_at, 0.001)
+        logging.info(
+            "Generated %s sessions, %s events, %s published to Pub/Sub, avg %.2f events/s.",
+            current_iteration,
+            self.generated_events,
+            self.published_events,
+            self.generated_events / elapsed,
+        )
 
     async def run(self):
         current_iteration = 0
@@ -145,6 +165,7 @@ class EventsOnlySimulator:
                 await asyncio.sleep(5)
             else:
                 current_iteration += 1
+                self._log_progress_if_needed(current_iteration)
 
     async def close(self):
         if self.writer.conn and not self.writer.conn.closed:
@@ -178,7 +199,9 @@ def main():
     parser.add_argument("--db-batch-size", type=int, default=1000)
     parser.add_argument("--publish-clickstream", action="store_true", help="Publish generated events to Pub/Sub.")
     parser.add_argument("--gcp-project-id", default=None, help="GCP project for Pub/Sub publishing.")
-    parser.add_argument("--clickstream-topic", default="clickstream", help="Pub/Sub topic for clickstream events.")
+    parser.add_argument("--clickstream-topic", default="clickstream_topic", help="Pub/Sub topic for clickstream events.")
+    parser.add_argument("--publish-timeout", type=int, default=30, help="Seconds to wait for each Pub/Sub publish future.")
+    parser.add_argument("--log-every-n-sessions", type=int, default=50, help="Log streaming progress every N generated sessions.")
 
     args = parser.parse_args()
     if args.publish_clickstream and not args.gcp_project_id:
