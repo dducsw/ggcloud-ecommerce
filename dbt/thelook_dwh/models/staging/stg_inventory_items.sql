@@ -1,5 +1,11 @@
 {{ config(materialized='view') }}
 
+with source as (
+    select
+        *,
+        row_number() over (partition by id order by cdc_timestamp desc) as rn
+    from {{ source('thelook_ecommerce', 'inventory_items') }}
+)
 select
     cast(id as int64) as inventory_item_id,
     cast(product_id as int64) as product_id,
@@ -14,6 +20,9 @@ select
     cast(product_sku as string) as product_sku,
     cast(product_distribution_center_id as int64) as product_distribution_center_id,
     -- CDC metadata
-    cast(cdc_timestamp as int64) as cdc_timestamp,
+    unix_micros(
+        safe_cast(safe_cast(cdc_timestamp as string) as timestamp)
+    ) as cdc_timestamp,
     cast(cdc_operation as string) as cdc_operation
-from {{ source('thelook_ecommerce', 'inventory_items') }}
+from source
+where rn = 1

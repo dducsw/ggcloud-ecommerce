@@ -69,52 +69,169 @@ def to_bq_row(record: dict) -> dict:
 
 
 
-class WriteColdParquetDoFn(beam.DoFn):
+
+FLUSH_INTERVAL_SECONDS = 60  # flush Parquet ra GCS mỗi N giây
+
+
+# Target timestamp type for all '_at' columns — must match BQ External Table schema (TIMESTAMP).
+_TS_TYPE = pa.timestamp("us", tz="UTC")
+_UTC = __import__("datetime").timezone.utc
+
+
+def _epoch_micros_to_datetime(val):
+    """Convert Debezium epoch-microseconds integer to a UTC-aware datetime.
+    Returns None for null/invalid values.
+    """
+    if val is None:
+        return None
+    try:
+        iv = int(val)
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(iv / 1_000_000.0, _UTC)
+
+
+def _normalize_row_timestamps(row: dict) -> dict:
+    """Pre-process a CDC row dict: convert integer _at epoch-micros to Python datetime
+    so that PyArrow infers timestamp[us] rather than int64, matching the BQ External Table.
+    Also converts ISO-string timestamps to datetime (fallback for CDC rows already stringified).
+    """
+    out = {}
+    for k, v in row.items():
+        if k.endswith("_at"):
+            if isinstance(v, int):
+                out[k] = _epoch_micros_to_datetime(v)
+            elif isinstance(v, str) and v not in ("", "null"):
+                # ISO string (e.g. from to_bq_row path) → parse to datetime
+                try:
+                    import dateutil.parser as _dp
+                    out[k] = _dp.parse(v).replace(tzinfo=_UTC) if _dp.parse(v).tzinfo is None else _dp.parse(v)
+                except Exception:
+                    out[k] = None
+            else:
+                out[k] = None
+        else:
+            out[k] = v
+    return out
+
+
+def _cast_arrow_schema(arrow_table):
+    """Normalize column types for a Parquet file written to GCS so that BigQuery
+    External Table (schema=TIMESTAMP for _at cols, INTEGER for id cols, STRING for rest)
+    can read all files uniformly.
+
+    Rules:
+    - Columns ending with '_at' → timestamp[us, tz=UTC]  (BQ TIMESTAMP)
+    - Integer columns           → int64                  (BQ INTEGER)
+    - Pure-null columns         → string (safe fallback, except _at → timestamp)
+    - Everything else           → keep as-is
+    """
+    TIMESTAMP_SUFFIXES = ("_at",)
+
+    new_fields = []
+    for field in arrow_table.schema:
+        is_ts_col = any(field.name.endswith(sfx) for sfx in TIMESTAMP_SUFFIXES)
+
+        if is_ts_col:
+            # Always target timestamp regardless of current inferred type
+            new_fields.append(pa.field(field.name, _TS_TYPE))
+        elif pa.types.is_null(field.type):
+            new_fields.append(pa.field(field.name, pa.string()))
+        elif pa.types.is_integer(field.type):
+            new_fields.append(pa.field(field.name, pa.int64()))
+        else:
+            new_fields.append(field)
+
+    new_schema = pa.schema(new_fields)
+
+    arrays = []
+    for i, field in enumerate(new_schema):
+        old_field = arrow_table.schema.field(i)
+        col = arrow_table.column(i)
+        is_ts_target = pa.types.is_timestamp(field.type)
+
+        if pa.types.is_null(old_field.type):
+            # All-null batch column: emit typed null array
+            arrays.append(pa.array([None] * len(col), type=field.type))
+        elif is_ts_target and not pa.types.is_timestamp(old_field.type):
+            # Need to convert non-timestamp source to timestamp.
+            # After _normalize_row_timestamps this should rarely happen,
+            # but handle int64 (epoch μs) just in case.
+            if pa.types.is_integer(old_field.type):
+                # int64 epoch-micros → cast directly to timestamp[us, UTC]
+                arrays.append(col.cast(_TS_TYPE))
+            elif pa.types.is_string(old_field.type) or pa.types.is_large_string(old_field.type):
+                # Parse string values to datetime
+                def _parse_ts(v):
+                    if v is None or v == "" or v == "null":
+                        return None
+                    try:
+                        import dateutil.parser as _dp
+                        dt = _dp.parse(v)
+                        return dt.replace(tzinfo=_UTC) if dt.tzinfo is None else dt
+                    except Exception:
+                        return None
+                arrays.append(pa.array([_parse_ts(v.as_py()) for v in col], type=_TS_TYPE))
+            else:
+                arrays.append(col.cast(field.type, safe=False))
+        else:
+            try:
+                arrays.append(col.cast(field.type, safe=False))
+            except Exception:
+                arrays.append(col)
+
+    return pa.table({field.name: arrays[i] for i, field in enumerate(new_schema)})
+
+
+def _flush_to_gcs(table_name, rows, output_prefix):
+    """Write a list of row dicts to a Parquet file on GCS."""
+    import time as _time
+    all_columns = sorted({k for row in rows for k in row.keys()})
+    # Pre-convert _at int epoch-micros to Python datetime BEFORE Arrow inference
+    # so that PyArrow picks timestamp[us] (matching BQ External Table schema).
+    normalized = [
+        _normalize_row_timestamps({col: row.get(col) for col in all_columns})
+        for row in rows
+    ]
+    arrow_table = _cast_arrow_schema(pa.Table.from_pylist(normalized))
+
+    now = datetime.fromtimestamp(
+        _time.time(),
+        getattr(datetime, "UTC", None) or __import__("datetime").timezone.utc,
+    )
+    ts = now.strftime("%Y%m%d%H%M%S%f")[:18]
+    output_path = (
+        f"{output_prefix.rstrip('/')}/{table_name}/"
+        f"date={now.strftime('%Y-%m-%d')}/hour={now.strftime('%H')}/cdc-{ts}.parquet"
+    )
+    with FileSystems.create(output_path) as fh:
+        pq.write_table(arrow_table, fh, coerce_timestamps="us", allow_truncated_timestamps=True)
+    logging.info(f"[cold-path] Flushed {len(rows)} rows for '{table_name}' → {output_path}")
+    return output_path
+
+
+
+
+class _WriteBatchedParquetDoFn(beam.DoFn):
+    """Receives (table_name, [records]) from GroupByKey and writes Parquet to GCS."""
+
     def __init__(self, output_prefix: str):
-        self.output_prefix = output_prefix.rstrip("/")
+        self.output_prefix = output_prefix
 
     def process(self, element, window=beam.DoFn.WindowParam):
         table_name, records_iter = element
-        records = list(records_iter)
+        rows = []
+        for record in records_iter:
+            row = dict(record.get("after") or record.get("before") or {})
+            row["cdc_timestamp"] = record.get("cdc_timestamp")
+            row["cdc_operation"] = record.get("op")
+            rows.append(row)
 
-        if not records:
+        if not rows:
             return
 
-        flattened_rows = []
-        for record in records:
-            row_payload = dict(record.get("after") or record.get("before") or {})
-            row_payload["cdc_timestamp"] = record.get("cdc_timestamp")
-            row_payload["cdc_operation"] = record.get("op")
-            flattened_rows.append(row_payload)
-
-        all_columns = sorted({k for row in flattened_rows for k in row.keys()})
-        normalized_rows = []
-        for row in flattened_rows:
-            normalized_rows.append({column: row.get(column) for column in all_columns})
-
-        arrow_table = pa.Table.from_pylist(normalized_rows)
-        # Using timezone-aware UTC datetime to fix Python DeprecationWarning
-        window_end = datetime.fromtimestamp(window.end.to_utc_datetime().timestamp(), getattr(datetime, "UTC", None) or __import__("datetime").timezone.utc)
-        processing_time = window_end.strftime("%Y%m%d%H%M%S")
-
-        # Hive-style partitioning: date=YYYY-MM-DD/hour=HH
-        # BQ External Table với hive_partitioning_mode=AUTO sẽ tự nhận partition key
-        date_str = window_end.strftime("%Y-%m-%d")
-        hour_str = window_end.strftime("%H")
-
-        output_path = (
-            f"{self.output_prefix}/{table_name}/"
-            f"date={date_str}/hour={hour_str}/part-{processing_time}.parquet"
-        )
-
-        with FileSystems.create(output_path) as file_handle:
-            pq.write_table(arrow_table, file_handle, coerce_timestamps='us', allow_truncated_timestamps=True)
-
-        yield {
-            "table": table_name,
-            "row_count": len(normalized_rows),
-            "path": output_path,
-        }
+        _flush_to_gcs(table_name, rows, self.output_prefix)
+        yield {"table": table_name, "row_count": len(rows)}
 
 
 def run(argv=None):
@@ -200,12 +317,21 @@ def run(argv=None):
                 )
             )
 
+
+
         _ = (
             cold_records
-            | "WindowCold5Min" >> beam.WindowInto(FixedWindows(300))
-            | "KeyByTable" >> beam.Map(lambda record: (record.get("table", "unknown"), record))
+            | "WindowCold" >> beam.WindowInto(
+                FixedWindows(60),
+                trigger=beam.transforms.trigger.AfterProcessingTime(60),
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.DISCARDING,
+                allowed_lateness=0,
+            )
+            | "KeyByTable" >> beam.Map(lambda r: (r.get("table", "unknown"), r))
             | "GroupByTable" >> beam.GroupByKey()
-            | "WriteColdParquet" >> beam.ParDo(WriteColdParquetDoFn(known_args.gcs_output_prefix))
+            | "WriteColdParquet" >> beam.ParDo(
+                _WriteBatchedParquetDoFn(known_args.gcs_output_prefix)
+            )
         )
 
 
