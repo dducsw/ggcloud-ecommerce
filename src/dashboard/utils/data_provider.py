@@ -97,6 +97,18 @@ class DataProvider:
             return None
         return max(latest_dates)
 
+    @st.cache_data(ttl=60, show_spinner=False)
+    def get_latest_timestamp(_self):
+        """Returns the most recent event timestamp for clickstream data."""
+        q = f"SELECT MAX(event_timestamp) as m FROM {_self.table_ref('v_events_raw_dedup')}"
+        try:
+            df = _self.run_query(q)
+            if not df.empty and not pd.isna(df.iloc[0]['m']):
+                return pd.to_datetime(df.iloc[0]['m'])
+        except Exception:
+            pass
+        return None
+
     def get_default_date_range(self, window_days: int = 30):
         latest = self.get_latest_date() or dt.date.today()
         safe_window = max(int(window_days), 1)

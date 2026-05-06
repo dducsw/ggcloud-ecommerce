@@ -6,7 +6,9 @@ def select_time_range(
     default_start: str, 
     default_end: str, 
     key_prefix: str = "filter",
-    presets: dict[str, dt.timedelta] = None
+    presets: dict[str, dt.timedelta] = None,
+    reference_time: pd.Timestamp = None,
+    default_index: int = None
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     """
     Renders a time range selector in the sidebar with presets and custom range options.
@@ -20,24 +22,40 @@ def select_time_range(
             "Last 90 days": dt.timedelta(days=90),
             "Custom range": None,
         }
-        default_index = 2 # Last 30 days
+        if default_index is None:
+            default_index = 2 # Last 30 days
     else:
-        default_index = 0
+        if default_index is None:
+            default_index = 0
 
     # Initialize applied values in session state if not already present
-    # We prioritize existing session state if it was set by app.py or another page
-    if f"{key_prefix}_applied_start" not in st.session_state:
-        # Check if we have global dates from app.py to use as starting point
-        if st.session_state.get("start_date"):
-            st.session_state[f"{key_prefix}_applied_start"] = pd.to_datetime(st.session_state["start_date"])
+    if f"{key_prefix}_applied_start" not in st.session_state or f"{key_prefix}_applied_end" not in st.session_state:
+        # Use preset if specified and available
+        if presets and default_index is not None:
+            preset_labels = list(presets.keys())
+            if 0 <= default_index < len(preset_labels):
+                selected_label = preset_labels[default_index]
+                delta = presets[selected_label]
+                
+                if delta is not None:
+                    if reference_time is not None:
+                        curr_end = reference_time.floor("min")
+                    else:
+                        ref_end = pd.to_datetime(default_end)
+                        curr_end = pd.Timestamp(dt.datetime.combine(ref_end.date(), dt.time(23, 59, 59)))
+                    
+                    st.session_state[f"{key_prefix}_applied_start"] = curr_end - delta
+                    st.session_state[f"{key_prefix}_applied_end"] = curr_end
+                else:
+                    # Fallback for "Custom range" or None delta
+                    st.session_state[f"{key_prefix}_applied_start"] = pd.to_datetime(default_start)
+                    st.session_state[f"{key_prefix}_applied_end"] = reference_time if reference_time is not None else pd.to_datetime(default_end)
+            else:
+                st.session_state[f"{key_prefix}_applied_start"] = pd.to_datetime(default_start)
+                st.session_state[f"{key_prefix}_applied_end"] = reference_time if reference_time is not None else pd.to_datetime(default_end)
         else:
             st.session_state[f"{key_prefix}_applied_start"] = pd.to_datetime(default_start)
-            
-    if f"{key_prefix}_applied_end" not in st.session_state:
-        if st.session_state.get("end_date"):
-            st.session_state[f"{key_prefix}_applied_end"] = pd.to_datetime(st.session_state["end_date"])
-        else:
-            st.session_state[f"{key_prefix}_applied_end"] = pd.to_datetime(default_end)
+            st.session_state[f"{key_prefix}_applied_end"] = reference_time if reference_time is not None else pd.to_datetime(default_end)
 
     # Current applied values for widget defaults
     applied_start = st.session_state[f"{key_prefix}_applied_start"]
@@ -45,14 +63,12 @@ def select_time_range(
 
     with st.sidebar:
         st.subheader("Time range")
-        # The selectbox is outside the form to allow immediate UI changes (presets vs custom)
         selected = st.selectbox("Window", list(presets), index=default_index, key=f"{key_prefix}_window_select")
 
         with st.form(key=f"{key_prefix}_form"):
             if selected == "Custom range":
                 col1, col2 = st.columns(2)
                 with col1:
-                    # Use applied_start.date() instead of default_start to preserve state after Apply
                     start_date = st.date_input("Start date", value=applied_start.date(), key=f"{key_prefix}_start_date_input")
                     start_time = st.time_input("Start time", value=applied_start.time(), key=f"{key_prefix}_start_time_input")
                 with col2:
@@ -62,33 +78,55 @@ def select_time_range(
                 curr_start = pd.Timestamp(dt.datetime.combine(start_date, start_time))
                 curr_end = pd.Timestamp(dt.datetime.combine(end_date, end_time))
             else:
-                ref_end = pd.to_datetime(default_end)
-                curr_end = pd.Timestamp(dt.datetime.combine(ref_end.date(), dt.time(23, 59, 59)))
+                if reference_time is not None:
+                    # Round to nearest minute to align with window boundaries
+                    curr_end = reference_time.floor("min")
+                else:
+                    ref_end = pd.to_datetime(default_end)
+                    curr_end = pd.Timestamp(dt.datetime.combine(ref_end.date(), dt.time(23, 59, 59)))
+                
                 curr_start = curr_end - presets[selected]
-                st.info(f"Range: {curr_start.strftime('%Y-%m-%d')} to {curr_end.strftime('%Y-%m-%d')}")
+                
+                # Show more detail in info box for smaller windows
+                if presets[selected] < dt.timedelta(days=1):
+                    st.info(f"Range: {curr_start.strftime('%Y-%m-%d %H:%M')} to {curr_end.strftime('%Y-%m-%d %H:%M')}")
+                else:
+                    st.info(f"Range: {curr_start.strftime('%Y-%m-%d')} to {curr_end.strftime('%Y-%m-%d')}")
             
             if st.form_submit_button("Apply Filters", width="stretch"):
                 if curr_start < curr_end:
                     st.session_state[f"{key_prefix}_applied_start"] = curr_start
                     st.session_state[f"{key_prefix}_applied_end"] = curr_end
-                    # Also update the global session state used by resolve_date_window
                     st.session_state["start_date"] = str(curr_start.date())
                     st.session_state["end_date"] = str(curr_end.date())
-                    # st.rerun() removed to avoid double-run on form submission
                 else:
                     st.error("Start time must be before end time.")
 
     return st.session_state[f"{key_prefix}_applied_start"], st.session_state[f"{key_prefix}_applied_end"]
 
-def filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp) -> pd.DataFrame:
+def filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp, end_ts: pd.Timestamp, freq: str = None) -> pd.DataFrame:
     """
     Filters a dataframe by a timestamp column within a given range.
+    Ensures all timestamps are timezone-naive for safe comparison.
+    If freq is provided, floors the start_ts to avoid losing overlapping buckets.
     """
     if df.empty or column not in df.columns:
         return df
+    
+    # Normalize comparison bounds to naive UTC
+    if hasattr(start_ts, "tzinfo") and start_ts.tzinfo is not None:
+        start_ts = start_ts.tz_localize(None)
+    if hasattr(end_ts, "tzinfo") and end_ts.tzinfo is not None:
+        end_ts = end_ts.tz_localize(None)
+
+    # Floor start_ts to frequency if requested to include partially overlapping buckets
+    if freq:
+        start_ts = start_ts.floor(freq)
+
     filtered = df.copy()
     filtered[column] = pd.to_datetime(filtered[column]).dt.tz_localize(None)
     return filtered[(filtered[column] >= start_ts) & (filtered[column] <= end_ts)]
+
 
 def fmt_int(value) -> str:
     return f"{int(value or 0):,}"

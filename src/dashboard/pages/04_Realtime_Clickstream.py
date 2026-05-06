@@ -134,7 +134,17 @@ rt_presets = {
     "Custom range": None,
 }
 
-range_start, range_end = select_time_range(start_date, end_date, key_prefix="rt", presets=rt_presets)
+range_presets = rt_presets.copy()
+latest_ts = data_provider.get_latest_timestamp()
+
+range_start, range_end = select_time_range(
+    start_date, 
+    end_date, 
+    key_prefix="rt", 
+    presets=range_presets, 
+    reference_time=latest_ts,
+    default_index=2 # Default to Last 30 minutes
+)
 query_start_date = str(range_start.date())
 query_end_date = str(range_end.date())
 traffic_filter: tuple[str, ...] = tuple()
@@ -150,12 +160,12 @@ def render_dashboard():
         traffic_filter,
     )
     business = data["business"]
-    event_type_windows = filter_by_time(data["event_type_windows"], "window_start", range_start, range_end)
+    event_type_windows = filter_by_time(data["event_type_windows"], "window_start", range_start, range_end, freq="5min")
     source_event_flow = data["source_event_flow"]
-    business_windows = filter_by_time(data["business_windows"], "window_start", range_start, range_end)
+    business_windows = filter_by_time(data["business_windows"], "window_start", range_start, range_end, freq="5min")
     freshness = data["freshness"]
     quality = data["quality"]
-    throughput = filter_by_time(data["throughput"], "window_start", range_start, range_end)
+    throughput = filter_by_time(data["throughput"], "window_start", range_start, range_end, freq="5min")
 
     if not event_type_windows.empty:
         event_mix = (
@@ -173,16 +183,16 @@ def render_dashboard():
     render_kpi_card(business_cols[2], "Users", fmt_int(business.get("total_users")), "Known users")
     render_kpi_card(business_cols[3], "Purchase/session", f"{float(business.get('conversion_rate') or 0):.2%}", "Light business signal")
 
-    st.subheader("Event Volume by Type")
+    st.subheader("Business: traffic by event type")
     if event_type_windows.empty:
         st.info("No event type window data available.")
     else:
         traffic_chart = (
             alt.Chart(event_type_windows)
-            .mark_area(opacity=0.72, line=True)
+            .mark_line(strokeWidth=2.5, interpolate="monotone", point=True)
             .encode(
                 x=alt.X("window_start:T", title="Window"),
-                y=alt.Y("total_events:Q", stack="zero", title="Events"),
+                y=alt.Y("total_events:Q", title="Events"),
                 color=alt.Color(
                     "event_type:N",
                     title="Event type",
@@ -195,12 +205,13 @@ def render_dashboard():
                 ],
             )
             .properties(height=300)
+            .interactive()
         )
         st.altair_chart(traffic_chart, width="stretch")
 
     business_left, business_right = st.columns(2)
     with business_left:
-        st.subheader("Event Mix Share")
+        st.subheader("Business: event share")
         if event_mix.empty:
             st.info("No event data available.")
         else:
@@ -224,41 +235,27 @@ def render_dashboard():
             st.altair_chart(chart, width="stretch")
 
     with business_right:
-        st.subheader("Purchase Event Trend")
+        st.subheader("Business: purchases over time")
         if business_windows.empty:
             st.info("No realtime windows available.")
         else:
-            purchase_long = business_windows.melt(
-                id_vars=["window_start"],
-                value_vars=["total_events", "purchase_events"],
-                var_name="metric",
-                value_name="value",
-            )
             chart = (
-                alt.Chart(purchase_long)
-                .mark_line(strokeWidth=2.3)
+                alt.Chart(business_windows)
+                .mark_line(color="#d36c42", strokeWidth=2.3)
                 .encode(
                     x=alt.X("window_start:T", title=None),
-                    y=alt.Y("value:Q", title="Events"),
-                    color=alt.Color(
-                        "metric:N",
-                        title="Metric",
-                        scale=alt.Scale(
-                            domain=["total_events", "purchase_events"],
-                            range=["#8db5d9", "#d36c42"],
-                        ),
-                    ),
+                    y=alt.Y("purchase_events:Q", title="Purchases"),
                     tooltip=[
                         alt.Tooltip("window_start:T", title="Window"),
-                        alt.Tooltip("metric:N", title="Metric"),
-                        alt.Tooltip("value:Q", title="Events", format=",.0f"),
+                        alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
+                        alt.Tooltip("purchase_events:Q", title="Purchases", format=",.0f"),
                     ],
                 )
                 .properties(height=280)
             )
             st.altair_chart(chart, width="stretch")
 
-    st.subheader("Traffic Source to Event Flow")
+    st.subheader("Business: traffic source to event flow")
     if source_event_flow.empty:
         st.info("No source/event flow data available.")
     else:
@@ -272,7 +269,7 @@ def render_dashboard():
 
     ops_left, ops_right = st.columns(2)
     with ops_left:
-        st.subheader("Throughput and Processing Lag")
+        st.subheader("Ops: throughput and lag")
         if throughput.empty:
             st.info("No throughput data available.")
         else:
@@ -291,7 +288,7 @@ def render_dashboard():
             st.altair_chart(alt.layer(events, lag).resolve_scale(y="independent").properties(height=280), width="stretch")
 
     with ops_right:
-        st.subheader("Data Quality Snapshot")
+        st.subheader("Ops: quality checks")
         quality_rows = pd.DataFrame(
             [
                 {"Check": "Raw rows", "Value": fmt_int(quality.get("raw_rows"))},
