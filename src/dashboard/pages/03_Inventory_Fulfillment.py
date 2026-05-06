@@ -21,7 +21,6 @@ def load_dashboard_data(start_date: str, end_date: str) -> dict:
             "inventory_dc": executor.submit(data_provider.get_inventory_by_distribution_center, start_date, end_date),
             "inventory_segments": executor.submit(data_provider.get_inventory_by_product_segment, start_date, end_date),
             "inventory_flow": executor.submit(data_provider.get_inventory_flow, start_date, end_date),
-            "delivery_histogram": executor.submit(data_provider.get_delivery_histogram, start_date, end_date),
         }
         return {key: future.result() for key, future in futures.items()}
 
@@ -65,7 +64,6 @@ def render_dashboard() -> None:
     inv_dc_df = normalize_money_columns(data["inventory_dc"], ["available_cost"])
     inv_segments_df = normalize_money_columns(data["inventory_segments"], ["available_cost"])
     inv_flow_df = data["inventory_flow"]
-    del_hist = data["delivery_histogram"]
 
     delivery_kpis = ops_df1.iloc[0].to_dict() if not ops_df1.empty else {}
     return_kpis = ops_df2.iloc[0].to_dict() if not ops_df2.empty else {}
@@ -275,46 +273,6 @@ def render_dashboard() -> None:
             .properties(height=360)
         )
         st.altair_chart(segment_chart, width="stretch")
-
-    st.subheader("Delivery Duration Distribution")
-    if del_hist.empty:
-        st.info("No delivery duration data available for the selected period.")
-    else:
-        duration_chart = (
-            alt.Chart(del_hist)
-            .mark_bar(color="#8db5d9")
-            .encode(
-                x=alt.X("duration_bucket:N", sort=del_hist["duration_bucket"].tolist(), title="Delivery duration"),
-                y=alt.Y("orders:Q", title="Orders"),
-                tooltip=[
-                    alt.Tooltip("duration_bucket:N", title="Duration"),
-                    alt.Tooltip("orders:Q", title="Orders", format=",.0f"),
-                ],
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(duration_chart, width="stretch")
-
-    st.subheader("Cumulative Delivered Orders")
-    if del_hist.empty:
-        st.info("No cumulative delivery data available.")
-    else:
-        cumulative = del_hist.sort_values("delivery_duration_days").copy()
-        cumulative["cumulative_orders"] = cumulative["orders"].cumsum()
-        chart = (
-            alt.Chart(cumulative)
-            .mark_line(point=True, color="#315f8c", strokeWidth=2.3)
-            .encode(
-                x=alt.X("delivery_duration_days:Q", title="Delivery days"),
-                y=alt.Y("cumulative_orders:Q", title="Cumulative orders"),
-                tooltip=[
-                    alt.Tooltip("delivery_duration_days:Q", title="Delivery days", format=",.0f"),
-                    alt.Tooltip("cumulative_orders:Q", title="Cumulative orders", format=",.0f"),
-                ],
-            )
-            .properties(height=280)
-        )
-        st.altair_chart(chart, width="stretch")
 
 
 apply_theme()

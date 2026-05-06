@@ -75,7 +75,7 @@ def render_dashboard() -> None:
             .mark_area(opacity=0.68, line=True)
             .encode(
                 x=alt.X("date:T", title=None),
-                y=alt.Y("value:Q", title="Amount ($)"),
+                y=alt.Y("value:Q", stack=None, title="Amount ($)"),
                 color=alt.Color(
                     "metric:N",
                     title="Metric",
@@ -107,8 +107,9 @@ def render_dashboard() -> None:
             alt.Chart(product_metrics)
             .mark_bar()
             .encode(
-                x=alt.X("amount:Q", stack="zero", title="Amount ($)"),
+                x=alt.X("amount:Q", title="Amount ($)"),
                 y=alt.Y("display_name:N", sort=top_products["display_name"].tolist(), title=None),
+                yOffset="metric:N",
                 color=alt.Color(
                     "metric:N",
                     title="Metric",

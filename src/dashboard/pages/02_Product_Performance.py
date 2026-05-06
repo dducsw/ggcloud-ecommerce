@@ -157,8 +157,9 @@ def render_dashboard() -> None:
                 alt.Chart(brand_long)
                 .mark_bar()
                 .encode(
-                    x=alt.X("amount:Q", stack="zero", title="Amount ($)"),
+                    x=alt.X("amount:Q", title="Amount ($)"),
                     y=alt.Y("brand:N", sort=top_brands["brand"].tolist(), title=None),
+                    yOffset="metric:N",
                     color=alt.Color(
                         "metric:N",
                         title="Metric",

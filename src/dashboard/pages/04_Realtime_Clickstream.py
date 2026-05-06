@@ -11,80 +11,6 @@ from utils.theme import apply_theme
 from utils.filters import select_time_range, filter_by_time, fmt_int, fmt_seconds, render_kpi_card
 
 
-def build_source_event_sankey(flow_df: pd.DataFrame) -> go.Figure:
-    top_flow = flow_df.copy().sort_values("total_events", ascending=False).head(28)
-    target_totals = top_flow.groupby("event_type", as_index=False)["total_events"].sum()
-    target_totals = target_totals.sort_values("total_events", ascending=False)
-    target_labels = {
-        row["event_type"]: f"{row['event_type']}  {int(row['total_events']):,}"
-        for _, row in target_totals.iterrows()
-    }
-
-    sources = [f"source::{value}" for value in top_flow["traffic_source"].astype(str).tolist()]
-    targets = [f"target::{value}" for value in top_flow["event_type"].map(target_labels).astype(str).tolist()]
-    node_ids = list(dict.fromkeys(sources + targets))
-    node_index = {node_id: idx for idx, node_id in enumerate(node_ids)}
-    source_idx = [node_index[node_id] for node_id in sources]
-    target_idx = [node_index[node_id] for node_id in targets]
-    palette = ["#ff9f1c", "#66c7c7", "#a6d854", "#006bd6", "#c65db5", "#8b65c9"]
-    event_color = {
-        label: palette[idx % len(palette)]
-        for idx, label in enumerate(target_labels.values())
-    }
-    source_color = "rgba(180, 198, 220, 0.30)"
-    source_ids = set(sources)
-    target_id_to_label = {f"target::{label}": label for label in target_labels.values()}
-    node_colors = [
-        source_color if node_id in source_ids else event_color.get(target_id_to_label.get(node_id, ""), "#66c7c7")
-        for node_id in node_ids
-    ]
-
-    def hex_to_rgba(hex_color: str, alpha: float = 0.42) -> str:
-        hex_color = hex_color.lstrip("#")
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        return f"rgba({r}, {g}, {b}, {alpha})"
-
-    link_colors = [hex_to_rgba(event_color.get(target_id_to_label.get(target, ""), "#66c7c7")) for target in targets]
-    display_labels = [target_id_to_label.get(node_id, " ") for node_id in node_ids]
-
-    fig = go.Figure(
-        data=[
-            go.Sankey(
-                arrangement="fixed",
-                node={
-                    "pad": 10,
-                    "thickness": 8,
-                    "line": {"color": "rgba(255,255,255,0)", "width": 0},
-                    "label": display_labels,
-                    "color": node_colors,
-                    "x": [0.06 if node_id in source_ids else 0.92 for node_id in node_ids],
-                    "y": [
-                        (idx + 1) / (len(node_ids) + 1)
-                        if node_id in source_ids
-                        else (list(target_labels.values()).index(target_id_to_label[node_id]) + 1) / (len(target_labels) + 1)
-                        for idx, node_id in enumerate(node_ids)
-                    ],
-                },
-                link={
-                    "source": source_idx,
-                    "target": target_idx,
-                    "value": top_flow["total_events"].tolist(),
-                    "color": link_colors,
-                },
-            )
-        ]
-    )
-    fig.update_layout(
-        height=380,
-        margin={"l": 4, "r": 16, "t": 4, "b": 4},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#dbeafe", "size": 13},
-    )
-    return fig
-
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_dashboard_data(start_date: str, end_date: str, range_start_value: str, range_end_value: str, traffic_filter: tuple[str, ...]) -> dict:
@@ -94,7 +20,6 @@ def load_dashboard_data(start_date: str, end_date: str, range_start_value: str, 
             "business": executor.submit(data_provider.get_overview_metrics, start_date, end_date, traffic_sources),
             "event_mix": executor.submit(data_provider.get_event_type_breakdown, start_date, end_date, traffic_sources),
             "event_type_windows": executor.submit(data_provider.get_event_type_windows, start_date, end_date, traffic_sources),
-            "source_event_flow": executor.submit(data_provider.get_source_event_flow, range_start_value, range_end_value, traffic_sources),
             "business_windows": executor.submit(data_provider.get_realtime_windows, start_date, end_date, traffic_sources),
             "freshness": executor.submit(data_provider.get_ingestion_freshness, start_date, end_date, traffic_sources),
             "quality": executor.submit(data_provider.get_event_quality_summary, start_date, end_date, traffic_sources),
@@ -161,7 +86,6 @@ def render_dashboard():
     )
     business = data["business"]
     event_type_windows = filter_by_time(data["event_type_windows"], "window_start", range_start, range_end, freq="5min")
-    source_event_flow = data["source_event_flow"]
     business_windows = filter_by_time(data["business_windows"], "window_start", range_start, range_end, freq="5min")
     freshness = data["freshness"]
     quality = data["quality"]
@@ -254,12 +178,6 @@ def render_dashboard():
                 .properties(height=280)
             )
             st.altair_chart(chart, width="stretch")
-
-    st.subheader("Business: traffic source to event flow")
-    if source_event_flow.empty:
-        st.info("No source/event flow data available.")
-    else:
-        st.plotly_chart(build_source_event_sankey(source_event_flow), width="stretch")
 
     ops_cols = st.columns(4)
     render_kpi_card(ops_cols[0], "Processing freshness", fmt_seconds(freshness.get("processing_freshness_seconds")), "Latest processing_time")
