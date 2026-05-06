@@ -6,6 +6,7 @@ import datetime
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 from faker import Faker
@@ -62,11 +63,38 @@ class TheLookECommSimulator:
         self.event_ids = IdAllocator()
         self._db_lock = threading.RLock()
         self.clickstream_publisher = None
+        self.generated_events = 0
+        self.published_events = 0
+        self.started_at = time.monotonic()
         if args.publish_clickstream:
             self.clickstream_publisher = ClickstreamEventPublisher(
                 project_id=args.gcp_project_id,
                 topic_name=args.clickstream_topic,
+                publish_timeout=args.publish_timeout,
             )
+
+    async def _publish_if_needed(self, events: list[Event]):
+        if not self.clickstream_publisher or not events:
+            return
+        published_count = await asyncio.to_thread(self.clickstream_publisher.publish_batch, events)
+        self.published_events += published_count
+
+    def _log_progress_if_needed(self, current_iteration: int):
+        if (
+            self.args.log_every_n_iterations <= 0
+            or current_iteration == 0
+            or current_iteration % self.args.log_every_n_iterations != 0
+        ):
+            return
+
+        elapsed = max(time.monotonic() - self.started_at, 0.001)
+        logging.info(
+            "Generated %s iterations, %s events, %s published to Pub/Sub, avg %.2f events/s.",
+            current_iteration,
+            self.generated_events,
+            self.published_events,
+            self.generated_events / elapsed,
+        )
 
     def _build_product_lookup(self, products: list[dict]) -> dict[int, dict]:
         lookup = {}
@@ -118,8 +146,6 @@ class TheLookECommSimulator:
         import re
         for event in events:
             event.id = self.event_ids.allocate()
-            if event.event_type in {"purchase", "cancel", "return"}:
-                event.event_type = "product"
             # Ensure all product events have a valid /product/{id} URI
             if event.event_type == "product" and not re.match(r"^/product/\d+$", event.uri):
                 product_id = random.choice(list(PRODUCT_MAP.keys()))
@@ -367,9 +393,8 @@ class TheLookECommSimulator:
             order_items,
             purchase_events,
         )
-        if self.clickstream_publisher:
-            for event in purchase_events:
-                await asyncio.to_thread(self.clickstream_publisher.publish, event)
+        self.generated_events += len(purchase_events)
+        await self._publish_if_needed(purchase_events)
 
     def _simulate_order_update(self):
         """Synchronous helper containing the logic for updating an order. To be run in a thread."""
@@ -470,9 +495,10 @@ class TheLookECommSimulator:
         except Exception:
             self.writer.rollback()
             raise
-        if random_events and self.clickstream_publisher:
-            for event in random_events:
-                self.clickstream_publisher.publish(event)
+        if random_events:
+            self.generated_events += len(random_events)
+            if self.clickstream_publisher:
+                self.clickstream_publisher.publish_batch(random_events)
 
     async def _simulate_side_tasks(self):
         """Runs secondary simulation events based on their respective probabilities."""
@@ -564,6 +590,7 @@ class TheLookECommSimulator:
                     )
                 self.consecutive_db_errors = 0
                 current_iteration += 1
+                self._log_progress_if_needed(current_iteration)
         logging.info("Simulation loop has finished.")
 
     async def close(self):
@@ -622,7 +649,9 @@ def main():
     parser.add_argument("--topic-prefix", type=str, default="ecomm", help="Kafka topic prefix.")
     parser.add_argument("--publish-clickstream", action="store_true", help="Publish generated events to Pub/Sub.")
     parser.add_argument("--gcp-project-id", type=str, default=os.getenv("GCP_PROJECT_ID"), help="GCP project for Pub/Sub publishing.")
-    parser.add_argument("--clickstream-topic", type=str, default="clickstream", help="Pub/Sub topic for clickstream events.")
+    parser.add_argument("--clickstream-topic", type=str, default="clickstream_topic", help="Pub/Sub topic for clickstream events.")
+    parser.add_argument("--publish-timeout", type=int, default=30, help="Seconds to wait for each Pub/Sub publish future.")
+    parser.add_argument("--log-every-n-iterations", type=int, default=25, help="Log streaming progress every N successful iterations.")
     # fmt: on
 
     args = parser.parse_args()

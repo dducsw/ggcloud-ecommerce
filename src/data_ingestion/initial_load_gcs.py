@@ -100,8 +100,8 @@ def main():
             print(f"❌ Lỗi khi đọc bảng {table}: {e}")
             continue
 
-        # Đảm bảo các cột thời gian được định dạng đúng để tránh lỗi dải TIMESTAMP trên BigQuery
-        date_cols = [col for col in df.columns if any(suffix in col for suffix in ["_at", "_date", "timestamp"])]
+        # Đảm bảo các cột thời gian được định dạng đúng, ngoại trừ các cột kỹ thuật như cdc_timestamp
+        date_cols = [col for col in df.columns if any(suffix in col for suffix in ["_at", "_date", "timestamp"]) and col != 'cdc_timestamp']
         for col in date_cols:
             df[col] = pd.to_datetime(df[col], errors='coerce')
 
@@ -129,8 +129,8 @@ def main():
         gcs_blob_name = f"{GCS_BRONZE_PREFIX}/{target_table_name}/date={date_str}/hour={hour_str}/part-00000-initial-load.parquet"
 
         # 5. Dọn dẹp dữ liệu cũ trên GCS của bảng này để tránh BigQuery đọc nhầm file lỗi
-        table_path_prefix = f"{GCS_BRONZE_PREFIX}/{target_table_name}/"
-        purge_gcs_prefix(GCS_BRONZE_BUCKET, table_path_prefix)
+        # table_path_prefix = f"{GCS_BRONZE_PREFIX}/{target_table_name}/"
+        # purge_gcs_prefix(GCS_BRONZE_BUCKET, table_path_prefix)
 
         # 6. Upload lên GCS
         print(f" Đang upload file Parquet...")

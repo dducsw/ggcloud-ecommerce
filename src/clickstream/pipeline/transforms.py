@@ -1,3 +1,4 @@
+import json
 import logging
 import threading
 
@@ -18,7 +19,9 @@ class ParseValidateDoFn(beam.DoFn):
     _processed_lock = threading.Lock()
     _total_processed = 0
 
-    def __init__(self):
+    def __init__(self, log_every_n_valid: int = 1000, log_invalid_messages: bool = True):
+        self.log_every_n_valid = log_every_n_valid
+        self.log_invalid_messages = log_invalid_messages
         self.valid_counter = Metrics.counter("clickstream", "valid_events")
         self.invalid_counter = Metrics.counter("clickstream", "invalid_events")
 
@@ -71,11 +74,13 @@ class ParseValidateDoFn(beam.DoFn):
                 ParseValidateDoFn._total_processed += 1
                 current_count = ParseValidateDoFn._total_processed
             
-            if current_count % 10 == 0:
+            if self.log_every_n_valid > 0 and current_count % self.log_every_n_valid == 0:
                 logging.info(f" >>> [Dataflow] Total records processed: {current_count}")
             yield beam.window.TimestampedValue(row, event_ts.timestamp())
         except Exception as exc:
             self.invalid_counter.inc()
+            if self.log_invalid_messages:
+                logging.warning("Invalid clickstream message: %s", exc)
             yield beam.pvalue.TaggedOutput(
                 self.DEADLETTER_TAG,
                 {

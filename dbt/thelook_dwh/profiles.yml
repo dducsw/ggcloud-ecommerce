@@ -3,11 +3,11 @@ thelook_dwh:
   outputs:
     dev:
       type: bigquery
-      method: service-account
+      method: oauth
       project: "{{ env_var('GCP_PROJECT_ID', 'cloud-data-project-492514') }}"
       dataset: "{{ env_var('BRONZE_DATASET_ID', 'thelook_staging') }}"
       threads: 4
-      keyfile: "../../credentials/gcp-key.json"
+      # keyfile: "../../credentials/gcp-key.json" # No longer needed with oauth
       location: "{{ env_var('BQ_LOCATION', 'asia-southeast1') }}"
       priority: interactive
       execution_project: "{{ env_var('GCP_PROJECT_ID', 'cloud-data-project-492514') }}"

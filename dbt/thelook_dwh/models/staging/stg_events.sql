@@ -15,9 +15,9 @@ with events_base as (
         coalesce(cast(traffic_source as string), 'Unknown') as traffic_source,
         coalesce(cast(uri as string), 'N/A') as uri,
         coalesce(cast(event_type as string), 'Unknown') as event_type,
-        cast(created_at as timestamp) as created_at,
+        coalesce({{ to_bq_timestamp('created_at') }}, timestamp_millis({{ to_cdc_timestamp('cdc_timestamp') }})) as created_at,
         -- CDC metadata
-        cast(cdc_timestamp as int64) as cdc_timestamp,
+        {{ to_cdc_timestamp('cdc_timestamp') }} as cdc_timestamp,
         cast(cdc_operation as string) as cdc_operation
     from {{ source('thelook_ecommerce', 'events') }}
     where cast(id as int64) is not null

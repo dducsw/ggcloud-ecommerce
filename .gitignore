@@ -22,3 +22,5 @@ datagen/data/*
 
 # DBT
 dbt/thelook_dwh/target
+report
+scratch
