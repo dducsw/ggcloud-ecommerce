@@ -103,7 +103,7 @@ session_presets = {
 }
 
 range_presets = session_presets.copy()
-latest_ts = data_provider.get_latest_timestamp()
+latest_ts = data_provider.get_latest_session_timestamp()
 
 range_start, range_end = select_time_range(
     start_date, 

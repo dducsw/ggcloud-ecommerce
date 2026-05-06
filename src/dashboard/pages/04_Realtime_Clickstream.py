@@ -135,7 +135,7 @@ rt_presets = {
 }
 
 range_presets = rt_presets.copy()
-latest_ts = data_provider.get_latest_timestamp()
+latest_ts = data_provider.get_latest_window_timestamp()
 
 range_start, range_end = select_time_range(
     start_date, 

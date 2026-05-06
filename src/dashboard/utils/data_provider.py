@@ -109,6 +109,30 @@ class DataProvider:
             pass
         return None
 
+    @st.cache_data(ttl=60, show_spinner=False)
+    def get_latest_window_timestamp(_self):
+        """Returns the most recent window_start for clickstream aggregates."""
+        q = f"SELECT MAX(window_start) as m FROM {_self.table_ref('v_events_5m_latest')}"
+        try:
+            df = _self.run_query(q)
+            if not df.empty and not pd.isna(df.iloc[0]['m']):
+                return pd.to_datetime(df.iloc[0]['m'])
+        except Exception:
+            pass
+        return None
+
+    @st.cache_data(ttl=60, show_spinner=False)
+    def get_latest_session_timestamp(_self):
+        """Returns the most recent session_end for session metrics."""
+        q = f"SELECT MAX(session_end) as m FROM {_self.table_ref('v_session_metrics_latest')}"
+        try:
+            df = _self.run_query(q)
+            if not df.empty and not pd.isna(df.iloc[0]['m']):
+                return pd.to_datetime(df.iloc[0]['m'])
+        except Exception:
+            pass
+        return None
+
     def get_default_date_range(self, window_days: int = 30):
         latest = self.get_latest_date() or dt.date.today()
         safe_window = max(int(window_days), 1)
