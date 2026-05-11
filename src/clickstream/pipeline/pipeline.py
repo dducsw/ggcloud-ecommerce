@@ -1,6 +1,8 @@
-from apache_beam.options.pipeline_options import PipelineOptions, SetupOptions, StandardOptions
+from apache_beam.options.pipeline_options import PipelineOptions, SetupOptions, StandardOptions, GoogleCloudOptions, WorkerOptions
 from apache_beam.transforms import trigger
 import apache_beam as beam
+import logging
+import os
 
 from src.clickstream.pipeline.schemas import AGGREGATE_SCHEMA, DEADLETTER_SCHEMA, RAW_EVENTS_SCHEMA, SESSION_SCHEMA
 from src.clickstream.pipeline.sinks import write_bq
@@ -25,8 +27,34 @@ def build_pipeline_options(args, pipeline_args):
         staging_location=args.staging_location,
         streaming=True,
     )
+    
+    # Standard Options
     options.view_as(StandardOptions).streaming = True
-    options.view_as(SetupOptions).save_main_session = True
+    
+    # Google Cloud Options
+    google_cloud_options = options.view_as(GoogleCloudOptions)
+    google_cloud_options.job_name = args.job_name
+    google_cloud_options.staging_location = args.staging_location
+    google_cloud_options.temp_location = args.temp_location
+    
+    # Worker Options
+    worker_options = options.view_as(WorkerOptions)
+    worker_options.max_num_workers = args.max_workers
+    worker_options.machine_type = args.worker_machine_type
+    worker_options.autoscaling_algorithm = args.autoscaling_algorithm
+    worker_options.use_public_ips = args.use_public_ips
+    
+    # Performance & Setup
+    setup_opts = options.view_as(SetupOptions)
+    setup_opts.save_main_session = True
+    # Ship the local 'src' package to Dataflow workers via setup.py.
+    # Without this, workers raise: ModuleNotFoundError: No module named 'src'
+    setup_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "setup.py")
+    setup_opts.setup_file = os.path.normpath(setup_file)
+    # Enable Dataflow Streaming Engine (Best Practice for streaming)
+    # This reduces worker CPU usage by offloading windowing/shuffling to GCP backend.
+    options.view_as(GoogleCloudOptions).enable_streaming_engine = True
+    
     return options
 
 
@@ -80,6 +108,7 @@ def run_pipeline(args, pipeline_args):
         enriched_events = (
             deduplicated_events
             | "EnrichEvents" >> beam.ParDo(EnrichEventDoFn(), product_map=product_side_input)
+            | "LogProgress" >> beam.Map(lambda x: logging.info(f"Enriched event: {x['event_id']}") or x if hash(x['event_id']) % 500 == 0 else x)
         )
 
         write_bq(

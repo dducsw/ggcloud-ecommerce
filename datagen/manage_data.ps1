@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$false)]
-    [ValidateSet("seed-snapshot", "gendata", "resume-gendata", "gendata-once", "reset-seed-gendata", "full-load-gcs")]
+    [ValidateSet("seed-snapshot", "gendata", "resume-gendata", "gendata-once", "reset-seed-gendata", "full-load-gcs", "gen-events")]
     [string]$Action = "seed-snapshot",
 
     [string]$PG_HOST = "localhost",
@@ -11,7 +11,12 @@ param(
     [string]$PG_SCHEMA = "demo",
     [int]$YEAR_SHIFT = 3,
     [switch]$IncludeEvents = $false,
-    [string]$PYTHON = "python"
+    [string]$PYTHON = "python",
+
+    # Cấu hình cho Clickstream Pub/Sub
+    [string]$GCP_PROJECT = $env:GCP_PROJECT_ID,
+    [string]$TOPIC = "clickstream_topic",
+    [float]$AVG_QPS = 5.0
 )
 
 Write-Host "`n--- TheLook Data Management ($Action) ---" -ForegroundColor Cyan
@@ -53,6 +58,15 @@ switch ($Action) {
     "full-load-gcs" {
         Write-Host " Running Full Load to GCS..." -ForegroundColor Yellow
         & $PYTHON ../src/etl/local_pg_to_gcs.py --pg-host $PG_HOST --pg-port $PG_PORT --pg-database $PG_DB --pg-user $PG_USER --pg-password $PG_PASSWORD --pg-schema $PG_SCHEMA
+    }
+
+    "gen-events" {
+        Write-Host " Starting Events-Only Generator..." -ForegroundColor Yellow
+        $PubSubArgs = if ($GCP_PROJECT) { "--publish-clickstream", "--gcp-project-id", $GCP_PROJECT, "--clickstream-topic", $TOPIC } else { @() }
+        & $PYTHON thelook-ecomm/generate_events_only.py `
+            --db-host $PG_HOST --db-port $PG_PORT --db-user $PG_USER --db-password $PG_PASSWORD --db-name $PG_DB --db-schema $PG_SCHEMA `
+            --avg-qps $AVG_QPS `
+            $PubSubArgs
     }
 }
 

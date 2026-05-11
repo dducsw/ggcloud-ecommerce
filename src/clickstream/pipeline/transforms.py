@@ -92,6 +92,9 @@ class ParseValidateDoFn(beam.DoFn):
 
 
 class EnrichEventDoFn(beam.DoFn):
+    def __init__(self):
+        self.enriched_counter = Metrics.counter("clickstream", "enriched_events")
+
     def process(self, row: dict, product_map: dict):
         enriched = dict(row)
         uri = enriched.get("uri")
@@ -115,6 +118,8 @@ class EnrichEventDoFn(beam.DoFn):
         enriched["is_conversion"] = enriched.get("event_type") == "purchase"
         enriched["processing_time"] = to_timestamp_string(now)
         enriched["event_lag_seconds"] = max(0.0, (ingested_at - event_ts).total_seconds())
+        
+        self.enriched_counter.inc()
         yield enriched
 
 

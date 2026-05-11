@@ -18,7 +18,6 @@ class DataProvider:
             st.stop()
         self.client = bigquery.Client(project=self.project_id)
 
-    @st.cache_data(ttl=300, show_spinner=False)
     def run_query(_self, query: str, params=None) -> pd.DataFrame:
         try:
             query_params = []
@@ -75,7 +74,6 @@ class DataProvider:
         brand_filter, brand_params = self._brand_filter(brands)
         return brand_filter, self._date_params(ds, de) + brand_params
 
-    @st.cache_data(ttl=300, show_spinner=False)
     def get_latest_date(_self):
         # We want the latest date across all primary data sources
         queries = [
@@ -97,7 +95,6 @@ class DataProvider:
             return None
         return max(latest_dates)
 
-    @st.cache_data(ttl=60, show_spinner=False)
     def get_latest_timestamp(_self):
         """Returns the most recent event timestamp for clickstream data."""
         q = f"SELECT MAX(event_timestamp) as m FROM {_self.table_ref('v_events_raw_dedup')}"
@@ -109,7 +106,6 @@ class DataProvider:
             pass
         return None
 
-    @st.cache_data(ttl=60, show_spinner=False)
     def get_latest_window_timestamp(_self):
         """Returns the most recent window_start for clickstream aggregates."""
         q = f"SELECT MAX(window_start) as m FROM {_self.table_ref('v_events_5m_latest')}"
@@ -121,7 +117,6 @@ class DataProvider:
             pass
         return None
 
-    @st.cache_data(ttl=60, show_spinner=False)
     def get_latest_session_timestamp(_self):
         """Returns the most recent session_end for session metrics."""
         q = f"SELECT MAX(session_end) as m FROM {_self.table_ref('v_session_metrics_latest')}"
@@ -419,7 +414,6 @@ class DataProvider:
         """
         return self.run_query(q, self._date_params(ds, de))
 
-    @st.cache_data(ttl=300, show_spinner=False)
     def get_latest_traffic_date(self):
         q = f"""
         SELECT MAX(DATE(created_at)) as latest_traffic_date
@@ -623,7 +617,6 @@ class DataProvider:
         return self.run_query(q, self._date_params(ds, de))
 
     # --- 04 Realtime Clickstream (Merged) ---
-    @st.cache_data(ttl=60, show_spinner=False)
     def get_traffic_sources(_self, start_date: str, end_date: str) -> list[str]:
         query = f"""
         SELECT DISTINCT traffic_source

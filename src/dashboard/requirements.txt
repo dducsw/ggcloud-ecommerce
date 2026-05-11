@@ -7,3 +7,4 @@ streamlit
 altair
 plotly
 google-cloud-bigquery-storage
+db-dtypes

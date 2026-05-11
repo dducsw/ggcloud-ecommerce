@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: clickstream-pipeline
+Version: 1.0.0
+Requires-Dist: apache-beam[gcp]
+Requires-Dist: google-cloud-bigquery
+Requires-Dist: google-cloud-pubsub
+Requires-Dist: google-cloud-storage
+Requires-Dist: pandas
+Requires-Dist: pyarrow
+Dynamic: requires-dist

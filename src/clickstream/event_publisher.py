@@ -6,12 +6,13 @@ from google.cloud import pubsub_v1
 
 
 class ClickstreamEventPublisher:
-    def __init__(self, project_id: str, topic_name: str):
+    def __init__(self, project_id: str, topic_name: str, publish_timeout: int = 30):
         self.project_id = project_id
         self.topic_name = topic_name
+        self.publish_timeout = publish_timeout
         self.publisher = pubsub_v1.PublisherClient()
         self.topic_path = self.publisher.topic_path(project_id, topic_name)
-        logging.info("Clickstream publisher initialized for topic %s", self.topic_path)
+        logging.info("Clickstream publisher initialized for topic %s with timeout %ds", self.topic_path, publish_timeout)
 
     @staticmethod
     def _normalize_timestamp(value) -> str:
@@ -53,7 +54,9 @@ class ClickstreamEventPublisher:
     def publish(self, event) -> None:
         self.publish_async(event).result(timeout=30)
 
-    def publish_batch(self, events, timeout: int = 30) -> None:
+    def publish_batch(self, events, timeout: int | None = None) -> int:
+        effective_timeout = timeout if timeout is not None else self.publish_timeout
         futures = [self.publish_async(event) for event in events]
         for future in futures:
-            future.result(timeout=timeout)
+            future.result(timeout=effective_timeout)
+        return len(events)

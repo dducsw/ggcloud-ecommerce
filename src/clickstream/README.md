@@ -19,19 +19,86 @@ python src/clickstream/init_infra.py --project <GCP_PROJECT_ID>
 python src/clickstream/init_infra.py --project <GCP_PROJECT_ID> --truncate
 ```
 
-(Hoặc dùng script PowerShell cũ: `.\infra\bigquery\setup_clickstream_bigquery.ps1 -ProjectId <GCP_PROJECT_ID>`)
+(Hoặc dùng flag `-Init` trong script PowerShell bên dưới để chạy init + pipeline cùng lúc)
 
-## Chạy Dataflow
+## Chạy Pipeline trên Dataflow
 
-```powershell
-.\src\clickstream\run_clickstream_pipeline.ps1 -ProjectId <GCP_PROJECT_ID> -BucketName <GCS_BUCKET_NAME>
-```
+> Chạy từ **thư mục gốc** của project (`BTL-DWH/`).
 
-## Chạy datagen publish clickstream
+**Cửa sổ 1 — Data Generator (Pub/Sub publisher):**
 
 ```powershell
-python datagen/thelook-ecomm/generator.py --publish-clickstream --gcp-project-id <GCP_PROJECT_ID> --clickstream-topic clickstream_topic
+cd datagen
+.\manage_data.ps1 -Action gen-events -GCP_PROJECT 'cloud-data-project-492514'
 ```
+
+**Cửa sổ 2 — Dataflow Streaming Job:**
+
+```powershell
+.\src\clickstream\run_clickstream_pipeline.ps1 `
+  -ProjectId 'cloud-data-project-492514' `
+  -BucketName 'etl-staging-0' `
+  -Runner DataflowRunner `
+  -ProductLookupDataset 'thelook_dwh' `
+  -ProductLookupTable 'dim_products' `
+  -UsePublicIps
+```
+
+> **Lưu ý:**
+> - Lần đầu submit sẽ mất ~2 phút để build & upload `src` package lên GCS staging.
+> - `-UsePublicIps` cần thiết nếu subnetwork chưa bật Private Google Access.
+> - Để chạy local (DirectRunner): bỏ `-Runner DataflowRunner` và `-UsePublicIps`.
+
+**Xem log job trên GCP Console:**
+
+```
+https://console.cloud.google.com/dataflow/jobs?project=cloud-data-project-492514
+```
+
+## Dừng / Hủy Dataflow Job
+
+Có 2 cách dừng job streaming:
+
+| Lệnh | Ý nghĩa | Khi nào dùng |
+|---|---|---|
+| `drain` | Xử lý hết data đang in-flight rồi dừng gracefully | Dừng bình thường, không mất data |
+| `cancel` | Dừng ngay lập tức, data đang xử lý bị bỏ | Cần tắt gấp, debug, hoặc job bị lỗi |
+
+**Drain (tắt graceful — khuyến nghị):**
+
+```powershell
+gcloud dataflow jobs drain <JOB_ID> --region=asia-east1
+```
+
+**Cancel (tắt ngay):**
+
+```powershell
+gcloud dataflow jobs cancel <JOB_ID> --region=asia-east1
+```
+
+**Tìm JOB_ID của job đang chạy và cancel luôn (one-liner):**
+
+```powershell
+$jobId = (gcloud dataflow jobs list `
+  --region=asia-east1 `
+  --filter="name=clickstream-processing-v1 AND state=Running" `
+  --format="value(id)" `
+  --project=cloud-data-project-492514) | Select-Object -First 1
+gcloud dataflow jobs cancel $jobId --region=asia-east1
+```
+
+**Drain job đang chạy (one-liner):**
+
+```powershell
+$jobId = (gcloud dataflow jobs list `
+  --region=asia-east1 `
+  --filter="name=clickstream-processing-v1 AND state=Running" `
+  --format="value(id)" `
+  --project=cloud-data-project-492514) | Select-Object -First 1
+gcloud dataflow jobs drain $jobId --region=asia-east1
+```
+
+> **Lưu ý:** Sau khi `drain`, job chuyển sang trạng thái `JOB_STATE_DRAINING` rồi `JOB_STATE_DRAINED`. Có thể mất vài phút.
 
 ## Outputs
 
@@ -42,3 +109,44 @@ python datagen/thelook-ecomm/generator.py --publish-clickstream --gcp-project-id
 - `thelook_clickstream.v_session_funnel`
 - `thelook_clickstream.v_daily_channel_kpis`
 - `thelook_clickstream.v_product_interest`
+
+## Deploy Dashboard lên Cloud Run
+
+> Chạy từ **thư mục gốc** của project (`BTL-DWH/`).
+
+```powershell
+# Deploy lần đầu (public URL, không cần đăng nhập)
+.\src\dashboard\deploy_cloudrun.ps1 `
+  -ProjectId 'cloud-data-project-492514' `
+  -AllowUnauthenticated
+
+# Deploy update (không thay đổi quyền truy cập)
+.\src\dashboard\deploy_cloudrun.ps1 `
+  -ProjectId 'cloud-data-project-492514'
+```
+
+**Tham số tùy chọn:**
+
+| Param | Default | Ý nghĩa |
+|---|---|---|
+| `-Region` | `asia-east1` | Region Cloud Run (Taiwan) |
+| `-Memory` | `512` | RAM (MB) |
+| `-MaxInstances` | `2` | Tối đa instances (giới hạn chi phí) |
+| `-MinInstances` | `0` | Scale-to-zero khi không có traffic |
+| `-AllowUnauthenticated` | off | Cho phép public access |
+
+**Xem URL sau khi deploy:**
+
+```powershell
+gcloud run services describe thelook-dashboard `
+  --region=asia-east1 `
+  --project=cloud-data-project-492514 `
+  --format="value(status.url)"
+```
+
+
+
+Việc cần làm, test Pub/Sub + Dataflow + BQ
+Bằng cách cho chạy PubSub, chạy Dataflow job, check dữ liệu mới nhất trên BiqQuery
+Trình bày lại Dashboad Clickstream phục vụ phân tích và ops. (Có thể redeploy dashboard và trình bày trên cloud), bổ sung thêm vài note nhỏ trên dashboard để biết event mới nhất đang ở thời gian nào -> dễ test luồng clickstream hơn
+Với Dataflow và Cloud Run (cho dashboard) thì đang chạy ở asia-east1 (taiwan) cho tiết kiệm, khi test nhớ bật/tạo dataflow job, test xong thì nhớ cancel job
