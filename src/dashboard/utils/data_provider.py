@@ -701,21 +701,24 @@ class DataProvider:
         df = _self.run_query(query)
         return df["traffic_source"].dropna().tolist() if not df.empty else []
 
-    def get_overview_metrics(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> dict:
-        event_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+    def get_overview_metrics(self, range_start: str, range_end: str, traffic_sources: list[str] | None = None) -> dict:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
         query = f"""
         SELECT
-            COUNT(*) AS total_events,
-            COUNT(DISTINCT session_id) AS total_sessions,
-            COUNT(DISTINCT user_id) AS total_users,
-            COUNTIF(event_type = 'purchase') AS purchase_events,
-            SAFE_DIVIDE(COUNTIF(event_type = 'purchase'), COUNT(DISTINCT session_id)) AS conversion_rate
+          COUNT(*) AS total_events,
+          COUNT(DISTINCT session_id) AS total_sessions,
+          COUNT(DISTINCT user_id) AS total_users,
+          COUNTIF(event_type = 'purchase') AS total_purchases,
+          SAFE_DIVIDE(COUNTIF(event_type = 'purchase'), COUNT(DISTINCT session_id)) AS conversion_rate
         FROM {self.table_ref('v_events_raw_dedup')}
-        WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
-          {event_filter}
+        WHERE event_timestamp >= TIMESTAMP('{range_start}')
+          AND event_timestamp <= TIMESTAMP('{range_end}')
+          {traffic_filter}
         """
-        df = self.run_query(query)
-        return df.iloc[0].to_dict() if not df.empty else {}
+        results = self.run_query(query)
+        if not results.empty:
+            return results.iloc[0].to_dict()
+        return {}
 
     def get_daily_events_and_purchases(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
         traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
@@ -764,17 +767,51 @@ class DataProvider:
         """
         return self.run_query(query)
 
-    def get_event_type_breakdown(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+    def get_event_type_breakdown(self, range_start: str, range_end: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
         traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
         query = f"""
         SELECT
           event_type,
           COUNT(*) AS total_events
         FROM {self.table_ref('v_events_raw_dedup')}
-        WHERE event_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+        WHERE event_timestamp >= TIMESTAMP('{range_start}')
+          AND event_timestamp <= TIMESTAMP('{range_end}')
           {traffic_filter}
         GROUP BY event_type
         ORDER BY total_events DESC
+        """
+        return self.run_query(query)
+
+    def get_event_trend_high_res(self, range_start: str, range_end: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        """Returns events per minute for trend charts."""
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          TIMESTAMP_TRUNC(event_timestamp, MINUTE) AS window_start,
+          COALESCE(event_type, 'Unknown') AS event_type,
+          COUNT(*) AS total_events
+        FROM {self.table_ref('v_events_raw_dedup')}
+        WHERE event_timestamp >= TIMESTAMP('{range_start}')
+          AND event_timestamp <= TIMESTAMP('{range_end}')
+          {traffic_filter}
+        GROUP BY 1, 2
+        ORDER BY 1
+        """
+        return self.run_query(query)
+
+    def get_user_trend_high_res(self, range_start: str, range_end: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        """Returns active users per minute for trend charts."""
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT
+          TIMESTAMP_TRUNC(event_timestamp, MINUTE) AS window_start,
+          COUNT(DISTINCT user_id) AS active_users
+        FROM {self.table_ref('v_events_raw_dedup')}
+        WHERE event_timestamp >= TIMESTAMP('{range_start}')
+          AND event_timestamp <= TIMESTAMP('{range_end}')
+          {traffic_filter}
+        GROUP BY 1
+        ORDER BY 1
         """
         return self.run_query(query)
 
@@ -1174,16 +1211,15 @@ class DataProvider:
         """
         return self.run_query(query)
 
-    def get_realtime_funnel(self, window_minutes: int = 60):
-        # Get sessions that had activity in the last X minutes relative to latest data
+    def get_realtime_funnel(self, range_start: str, range_end: str, traffic_sources: list[str] | None = None):
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
         q = f"""
-        WITH max_ts AS (
-            SELECT MAX(event_timestamp) as mts FROM {self.table_ref('v_events_raw_dedup')}
-        ),
-        recent_sessions AS (
+        WITH recent_sessions AS (
             SELECT session_id
-            FROM {self.table_ref('v_events_raw_dedup')}, max_ts
-            WHERE event_timestamp >= TIMESTAMP_SUB(mts, INTERVAL {window_minutes} MINUTE)
+            FROM {self.table_ref('v_events_raw_dedup')}
+            WHERE event_timestamp >= TIMESTAMP('{range_start}')
+              AND event_timestamp <= TIMESTAMP('{range_end}')
+              {traffic_filter}
             GROUP BY 1
         ),
         session_stages AS (
@@ -1247,14 +1283,15 @@ class DataProvider:
         """
         return self.run_query(query)
 
-    def get_top_bounce_pages(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+    def get_top_bounce_pages(self, range_start: str, range_end: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
         traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
         query = f"""
         SELECT 
             uri,
             COUNT(*) as bounces
         FROM {self.table_ref('v_session_metrics_latest')}
-        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+        WHERE session_start >= TIMESTAMP('{range_start}', 'Asia/Ho_Chi_Minh')
+          AND session_start <= TIMESTAMP('{range_end}', 'Asia/Ho_Chi_Minh')
           AND event_count <= 2
           {traffic_filter}
         GROUP BY 1

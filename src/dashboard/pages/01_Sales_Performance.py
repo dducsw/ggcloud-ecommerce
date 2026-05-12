@@ -22,6 +22,7 @@ def load_dashboard_data(start_date: str, end_date: str) -> dict:
             "order_status": executor.submit(data_provider.get_order_status_stats, start_date, end_date),
             "order_type": executor.submit(data_provider.get_order_type_stats, start_date, end_date),
             "orders_by_city": executor.submit(data_provider.get_orders_by_city, start_date, end_date),
+            "events_daily": executor.submit(data_provider.get_daily_events_and_purchases, start_date, end_date),
         }
         return {key: future.result() for key, future in futures.items()}
 
@@ -54,6 +55,7 @@ def render_dashboard() -> None:
     order_status_df = data["order_status"]
     order_type_df = data["order_type"]
     orders_by_city_df = data["orders_by_city"]
+    events_daily_df = data["events_daily"]
 
     kpis = kpi_df.iloc[0].to_dict() if not kpi_df.empty else {}
     comp = comp_df.iloc[0].to_dict() if not comp_df.empty else {}
@@ -99,6 +101,30 @@ def render_dashboard() -> None:
             .interactive()
         )
         st.altair_chart(chart, width="stretch")
+
+    render_section_header("Daily Event Traffic", icon="stacked_line_chart")
+    if events_daily_df.empty:
+        st.info("No event traffic data available.")
+    else:
+        # Create a line chart for events and purchases
+        events_base = alt.Chart(events_daily_df).encode(x=alt.X("event_date:T", title=None))
+        
+        events_line = events_base.mark_line(color="#3b82f6", strokeWidth=3, point=True).encode(
+            y=alt.Y("total_events:Q", title="Total Events"),
+            tooltip=["event_date:T", "total_events:Q"]
+        )
+        
+        purchases_line = events_base.mark_line(color="#ef4444", strokeWidth=3, point=True).encode(
+            y=alt.Y("purchase_events:Q", title="Purchase Events"),
+            tooltip=["event_date:T", "purchase_events:Q"]
+        )
+        
+        # Layer them and resolve scales to see both clearly
+        combined_chart = alt.layer(events_line, purchases_line).resolve_scale(
+            y="independent"
+        ).properties(height=300).interactive()
+        
+        st.altair_chart(combined_chart, width="stretch")
 
     render_section_header("Top Products by Performance", icon="inventory_2")
     if top_products_df.empty:

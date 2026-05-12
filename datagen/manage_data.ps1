@@ -16,7 +16,7 @@ param(
     # Cấu hình cho Clickstream Pub/Sub
     [string]$GCP_PROJECT = $env:GCP_PROJECT_ID,
     [string]$TOPIC = "clickstream_topic",
-    [float]$AVG_QPS = 5.0
+    [float]$AVG_QPS = 12.0
 )
 
 Write-Host "`n--- TheLook Data Management ($Action) ---" -ForegroundColor Cyan

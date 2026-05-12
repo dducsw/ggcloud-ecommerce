@@ -19,7 +19,7 @@ class ParseValidateDoFn(beam.DoFn):
     _processed_lock = threading.Lock()
     _total_processed = 0
 
-    def __init__(self, log_every_n_valid: int = 1000, log_invalid_messages: bool = True):
+    def __init__(self, log_every_n_valid: int = 100, log_invalid_messages: bool = True):
         self.log_every_n_valid = log_every_n_valid
         self.log_invalid_messages = log_invalid_messages
         self.valid_counter = Metrics.counter("clickstream", "valid_events")
@@ -121,6 +121,25 @@ class EnrichEventDoFn(beam.DoFn):
         
         self.enriched_counter.inc()
         yield enriched
+
+
+class LogCountDoFn(beam.DoFn):
+    """A simple DoFn to log progress every N records."""
+    _count_lock = threading.Lock()
+    _counts = {}
+
+    def __init__(self, name: str, interval: int = 100):
+        self.name = name
+        self.interval = interval
+
+    def process(self, element):
+        with LogCountDoFn._count_lock:
+            LogCountDoFn._counts[self.name] = LogCountDoFn._counts.get(self.name, 0) + 1
+            current = LogCountDoFn._counts[self.name]
+
+        if current % self.interval == 0:
+            logging.info(f" [Progress] {self.name}: {current} records processed")
+        yield element
 
 
 class DeduplicateEventsDoFn(beam.DoFn):

@@ -9,6 +9,7 @@ from src.clickstream.pipeline.sinks import write_bq
 from src.clickstream.pipeline.transforms import (
     DeduplicateEventsDoFn,
     EnrichEventDoFn,
+    LogCountDoFn,
     ParseValidateDoFn,
     build_session_metric,
     create_aggregate_record,
@@ -108,7 +109,7 @@ def run_pipeline(args, pipeline_args):
         enriched_events = (
             deduplicated_events
             | "EnrichEvents" >> beam.ParDo(EnrichEventDoFn(), product_map=product_side_input)
-            | "LogProgress" >> beam.Map(lambda x: logging.info(f"Enriched event: {x['event_id']}") or x if hash(x['event_id']) % 500 == 0 else x)
+            | "LogEnriched" >> beam.ParDo(LogCountDoFn("EnrichedEvents", interval=100))
         )
 
         write_bq(

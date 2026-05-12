@@ -40,15 +40,17 @@ def load_dashboard_data(start_date: str, end_date: str, range_start_value: str, 
     traffic_sources = list(traffic_filter)
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
-            "business": executor.submit(data_provider.get_overview_metrics, start_date, end_date, traffic_sources),
-            "event_mix": executor.submit(data_provider.get_event_type_breakdown, start_date, end_date, traffic_sources),
+            "business": executor.submit(data_provider.get_overview_metrics, range_start_value, range_end_value, traffic_sources),
+            "event_mix": executor.submit(data_provider.get_event_type_breakdown, range_start_value, range_end_value, traffic_sources),
             "event_type_windows": executor.submit(data_provider.get_event_type_windows, start_date, end_date, traffic_sources),
             "business_windows": executor.submit(data_provider.get_realtime_windows, start_date, end_date, traffic_sources),
             "freshness": executor.submit(data_provider.get_ingestion_freshness, start_date, end_date, traffic_sources),
             "quality": executor.submit(data_provider.get_event_quality_summary, start_date, end_date, traffic_sources),
             "throughput": executor.submit(data_provider.get_throughput_by_window, start_date, end_date, traffic_sources),
-            "funnel": executor.submit(data_provider.get_realtime_funnel, 60),
-            "bounces": executor.submit(data_provider.get_top_bounce_pages, start_date, end_date, traffic_sources),
+            "funnel": executor.submit(data_provider.get_realtime_funnel, range_start_value, range_end_value, traffic_sources),
+            "bounces": executor.submit(data_provider.get_top_bounce_pages, range_start_value, range_end_value, traffic_sources),
+            "event_trend_high_res": executor.submit(data_provider.get_event_trend_high_res, range_start_value, range_end_value, traffic_sources),
+            "user_trend_high_res": executor.submit(data_provider.get_user_trend_high_res, range_start_value, range_end_value, traffic_sources),
         }
         return {key: future.result() for key, future in futures.items()}
 
@@ -109,7 +111,9 @@ def render_dashboard():
         traffic_filter,
     )
     business = data["business"]
-    event_type_windows = filter_by_time(data["event_type_windows"], "window_start", range_start, range_end, freq="5min")
+    event_type_windows = data["event_trend_high_res"]
+    user_trend_high_res = data["user_trend_high_res"]
+    business_windows = filter_by_time(data["business_windows"], "window_start", range_start, range_end, freq="5min")
     freshness = data["freshness"]
     quality = data["quality"]
     throughput = filter_by_time(data["throughput"], "window_start", range_start, range_end, freq="5min")
@@ -204,21 +208,100 @@ def render_dashboard():
                 )
                 .properties(height=350)
             )
-            st.altair_chart(chart, width="stretch")
+            st.altair_chart(chart, use_container_width=True)
+
+    # --- 1. Business: Traffic by Event Type (High-Res, No Points) ---
+    if not event_type_windows.empty:
+        st.markdown("---")
+        render_section_header("Business: traffic by event type", icon="show_chart")
+        event_trend = (
+            alt.Chart(event_type_windows)
+            .mark_line(point=False, strokeWidth=1.5, interpolate="linear")
+            .encode(
+                x=alt.X("window_start:T", title="Time"),
+                y=alt.Y("total_events:Q", title="Events/Min"),
+                color=alt.Color("event_type:N", title="Event type", scale=alt.Scale(scheme="tableau10")),
+                tooltip=["window_start:T", "event_type:N", "total_events:Q"]
+            )
+            .properties(height=350)
+            .interactive()
+        )
+        st.altair_chart(event_trend, use_container_width=True)
+
+    # --- 2. User Dynamics: Active Users Trend (High-Res, No Points) ---
+    if not user_trend_high_res.empty:
+        st.markdown("---")
+        render_section_header("User Dynamics: Active Users", icon="group")
+        user_trend_chart = (
+            alt.Chart(user_trend_high_res)
+            .mark_area(
+                color="#10b981", 
+                opacity=0.1, 
+                line={"color": "#10b981", "strokeWidth": 2},
+                interpolate="linear"
+            ).encode(
+                x=alt.X("window_start:T", title="Time"),
+                y=alt.Y("active_users:Q", title="Active Users/Min"),
+                tooltip=["window_start:T", "active_users:Q"]
+            )
+            .properties(height=350)
+            .interactive()
+        )
+        st.altair_chart(user_trend_chart, use_container_width=True)
+
+    # --- 3. Overall Events & Purchase Trend (High-Res, No Points) ---
+    if not event_type_windows.empty:
+        st.markdown("---")
+        render_section_header("Overall Events & Purchase Trend", icon="insights")
+        
+        # Aggregate high-res events by minute for overall total
+        overall_trend = event_type_windows.groupby("window_start")["total_events"].sum().reset_index()
+        purchase_trend = event_type_windows[event_type_windows["event_type"] == "purchase"]
+        
+        base = alt.Chart(overall_trend).encode(x=alt.X("window_start:T", title="Time"))
+        
+        line_events = base.mark_area(
+            color="#3b82f6", 
+            opacity=0.2, 
+            line={"color": "#3b82f6", "strokeWidth": 1.5},
+            interpolate="linear"
+        ).encode(
+            y=alt.Y("total_events:Q", title="Total Events/Min"),
+            tooltip=["window_start:T", "total_events:Q"]
+        )
+        
+        # Layer purchases
+        purchase_base = alt.Chart(purchase_trend).encode(x=alt.X("window_start:T", title="Time"))
+        line_purchases = purchase_base.mark_line(
+            color="#ef4444", 
+            strokeWidth=2,
+            point=False,
+            interpolate="linear"
+        ).encode(
+            y=alt.Y("total_events:Q", title="Purchases/Min"),
+            tooltip=["window_start:T", "total_events:Q"]
+        )
+        
+        combined_chart = alt.layer(line_events, line_purchases).resolve_scale(
+            y="independent"
+        ).properties(height=380).interactive()
+        
+        st.altair_chart(combined_chart, use_container_width=True)
+        st.markdown("---")
 
     render_section_header("Pipeline Operations", icon="settings")
-    ops_cols = st.columns(4)
-    render_kpi_card(ops_cols[0], "Proc. Lag", fmt_seconds(freshness.get("processing_freshness_seconds")), "Latency")
-    render_kpi_card(ops_cols[1], "Agg. Freshness", fmt_seconds(freshness.get("aggregate_freshness_seconds")), "DWH Delay")
-    render_kpi_card(ops_cols[2], "Throughput", f"{throughput['events_per_second'].mean():.1f} eps", "Avg events/sec")
-    render_kpi_card(ops_cols[3], "DLQ Rate", f"{float(quality.get('reject_rate') or 0):.2%}", "Reject rate")
-
     if not throughput.empty:
-        render_section_header("Throughput & Event Lag Trend", icon="speed")
+        ops_cols = st.columns(4)
+        render_kpi_card(ops_cols[0], "Proc. Lag", fmt_seconds(freshness.get("processing_freshness_seconds")), "Latency")
+        render_kpi_card(ops_cols[1], "Agg. Freshness", fmt_seconds(freshness.get("aggregate_freshness_seconds")), "DWH Delay")
+        render_kpi_card(ops_cols[2], "Throughput", f"{throughput['events_per_second'].mean():.1f} eps", "Avg events/sec")
+        render_kpi_card(ops_cols[3], "DLQ Rate", f"{float(quality.get('reject_rate') or 0):.2%}", "Reject rate")
+
+        st.markdown("### Throughput & Event Lag Trend")
         base = alt.Chart(throughput).encode(x=alt.X("window_start:T", title=None))
         events = base.mark_area(color="#3b82f6", opacity=0.3).encode(y=alt.Y("events_per_second:Q", title="EPS"))
         lag = base.mark_line(color="#ef4444", strokeWidth=2).encode(y=alt.Y("avg_event_lag_seconds:Q", title="Lag (s)"))
-        st.altair_chart(alt.layer(events, lag).resolve_scale(y="independent").properties(height=300), width="stretch")
+        st.altair_chart(alt.layer(events, lag).resolve_scale(y="independent").properties(height=300), use_container_width=True)
 
     with st.expander("🛠️ Testing Guide", expanded=False):
         st.code("""
