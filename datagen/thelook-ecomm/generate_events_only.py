@@ -15,9 +15,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.clickstream.event_publisher import ClickstreamEventPublisher
-from src.db_writer import DataWriter
-from src.id_allocator import IdAllocator
-from src.models import Event, EventCategory, User, PRODUCT_MAP
+from thelook_src.db_writer import DataWriter
+from thelook_src.id_allocator import IdAllocator
+from thelook_src.models import Event, EventCategory, User, PRODUCT_MAP
 
 
 logging.basicConfig(

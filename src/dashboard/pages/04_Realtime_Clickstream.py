@@ -12,10 +12,33 @@ from utils.filters import select_time_range, filter_by_time, fmt_int, fmt_second
 
 
 
+def fmt_time_ago(ts):
+    if ts is None or pd.isna(ts):
+        return "Unknown"
+    now = dt.datetime.now(dt.timezone.utc)
+    if isinstance(ts, str):
+        ts = pd.to_datetime(ts)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.timezone.utc)
+    
+    diff = now - ts
+    seconds = diff.total_seconds()
+    
+    if seconds < 0:
+        return "Just now"
+    if seconds < 60:
+        return f"{int(seconds)}s ago"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def load_dashboard_data(start_date: str, end_date: str, range_start_value: str, range_end_value: str, traffic_filter: tuple[str, ...]) -> dict:
     traffic_sources = list(traffic_filter)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {
             "business": executor.submit(data_provider.get_overview_metrics, start_date, end_date, traffic_sources),
             "event_mix": executor.submit(data_provider.get_event_type_breakdown, start_date, end_date, traffic_sources),
@@ -24,12 +47,15 @@ def load_dashboard_data(start_date: str, end_date: str, range_start_value: str, 
             "freshness": executor.submit(data_provider.get_ingestion_freshness, start_date, end_date, traffic_sources),
             "quality": executor.submit(data_provider.get_event_quality_summary, start_date, end_date, traffic_sources),
             "throughput": executor.submit(data_provider.get_throughput_by_window, start_date, end_date, traffic_sources),
+            "funnel": executor.submit(data_provider.get_realtime_funnel, 60),
+            "bounces": executor.submit(data_provider.get_top_bounce_pages, start_date, end_date, traffic_sources),
         }
         return {key: future.result() for key, future in futures.items()}
 
 
+from utils.theme import render_page_header, render_section_header
 apply_theme()
-st.title("Realtime Clickstream")
+render_page_header("Realtime Clickstream", "Live monitoring of user behavior and pipeline health.", icon="bolt")
 
 with st.sidebar:
     st.markdown("---")
@@ -50,25 +76,23 @@ start_date = str(active_start)
 end_date = str(active_end)
 
 rt_presets = {
-    "Last 5 minutes": dt.timedelta(minutes=5),
-    "Last 15 minutes": dt.timedelta(minutes=15),
-    "Last 30 minutes": dt.timedelta(minutes=30),
-    "Last 1 hour": dt.timedelta(hours=1),
-    "Last 6 hours": dt.timedelta(hours=6),
-    "Last 1 day": dt.timedelta(days=1),
-    "Custom range": None,
+    "Last 5m": dt.timedelta(minutes=5),
+    "Last 15m": dt.timedelta(minutes=15),
+    "Last 30m": dt.timedelta(minutes=30),
+    "Last 1h": dt.timedelta(hours=1),
+    "Last 6h": dt.timedelta(hours=6),
+    "Custom": None,
 }
 
-range_presets = rt_presets.copy()
 latest_ts = data_provider.get_latest_window_timestamp()
 
 range_start, range_end = select_time_range(
     start_date, 
     end_date, 
     key_prefix="rt", 
-    presets=range_presets, 
+    presets=rt_presets, 
     reference_time=latest_ts,
-    default_index=2 # Default to Last 30 minutes
+    default_index=2
 )
 query_start_date = str(range_start.date())
 query_end_date = str(range_end.date())
@@ -86,138 +110,125 @@ def render_dashboard():
     )
     business = data["business"]
     event_type_windows = filter_by_time(data["event_type_windows"], "window_start", range_start, range_end, freq="5min")
-    business_windows = filter_by_time(data["business_windows"], "window_start", range_start, range_end, freq="5min")
     freshness = data["freshness"]
     quality = data["quality"]
     throughput = filter_by_time(data["throughput"], "window_start", range_start, range_end, freq="5min")
+    funnel_df = data["funnel"]
+    bounces_df = data["bounces"]
 
-    if not event_type_windows.empty:
-        event_mix = (
-            event_type_windows.groupby("event_type", as_index=False)["total_events"]
-            .sum()
-            .sort_values("total_events", ascending=False)
-        )
-        business["total_events"] = event_mix["total_events"].sum()
-    else:
-        event_mix = data["event_mix"]
+    # --- System Status Banner ---
+    status_cols = st.columns(4)
+    latest_event = freshness.get("latest_event_timestamp")
+    latest_proc = freshness.get("latest_processing_time")
+    
+    with status_cols[0]:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Latest Event</div>
+                <div class="metric-value">{fmt_time_ago(latest_event)}</div>
+                <div class="metric-subtitle">{latest_event.strftime('%H:%M:%S') if latest_event else '-'}</div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+    with status_cols[1]:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Latest Processed</div>
+                <div class="metric-value">{fmt_time_ago(latest_proc)}</div>
+                <div class="metric-subtitle">{latest_proc.strftime('%H:%M:%S') if latest_proc else '-'}</div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+    with status_cols[2]:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Current UTC</div>
+                <div class="metric-value">{dt.datetime.now(dt.timezone.utc).strftime('%H:%M:%S')}</div>
+                <div class="metric-subtitle">{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d')}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
+    with status_cols[3]:
+        is_active = freshness.get("processing_freshness_seconds", 999) < 300
+        badge_class = "status-badge-active" if is_active else "status-badge-idle"
+        status_text = "ACTIVE" if is_active else "IDLE"
+        st.markdown(f"""
+            <div class="metric-card" style="align-items: center; justify-content: center;">
+                <div class="metric-label">Pipeline Status</div>
+                <div class="status-badge {badge_class}" style="font-size: 1.25rem; padding: 8px 24px;">{status_text}</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    render_section_header("Stream Insights", icon="analytics")
     business_cols = st.columns(4)
-    render_kpi_card(business_cols[0], "Events", fmt_int(business.get("total_events")), "Deduplicated clickstream")
-    render_kpi_card(business_cols[1], "Sessions", fmt_int(business.get("total_sessions")), "Distinct sessions")
-    render_kpi_card(business_cols[2], "Users", fmt_int(business.get("total_users")), "Known users")
-    render_kpi_card(business_cols[3], "Purchase/session", f"{float(business.get('conversion_rate') or 0):.2%}", "Light business signal")
+    render_kpi_card(business_cols[0], "Live Events", fmt_int(business.get("total_events")), "Total in window")
+    render_kpi_card(business_cols[1], "Sessions", fmt_int(business.get("total_sessions")), "Active visits")
+    render_kpi_card(business_cols[2], "Active Users", fmt_int(business.get("total_users")), "Identified")
+    render_kpi_card(business_cols[3], "Conv. Rate", f"{float(business.get('conversion_rate') or 0):.2%}", "Purchases/Sessions")
 
-    st.subheader("Business: traffic by event type")
-    if event_type_windows.empty:
-        st.info("No event type window data available.")
-    else:
-        traffic_chart = (
-            alt.Chart(event_type_windows)
-            .mark_line(strokeWidth=2.5, interpolate="monotone", point=True)
-            .encode(
-                x=alt.X("window_start:T", title="Window"),
-                y=alt.Y("total_events:Q", title="Events"),
-                color=alt.Color(
-                    "event_type:N",
-                    title="Event type",
-                    scale=alt.Scale(range=["#d47465", "#66bcc7", "#8ccf68", "#9a68cc", "#cf65b5", "#5f7288"]),
-                ),
-                tooltip=[
-                    alt.Tooltip("window_start:T", title="Window"),
-                    alt.Tooltip("event_type:N", title="Event"),
-                    alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
-                ],
-            )
-            .properties(height=300)
-            .interactive()
-        )
-        st.altair_chart(traffic_chart, width="stretch")
+    col_l, col_r = st.columns([3, 2])
+    with col_l:
+        render_section_header("Conversion Funnel", icon="filter_list")
+        if funnel_df.empty:
+            st.info("No funnel data.")
+        else:
+            # Add drop-off %
+            funnel_df["prev_sessions"] = funnel_df["sessions"].shift(1)
+            funnel_df["retention"] = (funnel_df["sessions"] / funnel_df["prev_sessions"]).fillna(1)
+            funnel_df["dropoff"] = 1 - funnel_df["retention"]
+            
+            fig = go.Figure(go.Funnel(
+                y=funnel_df["stage"],
+                x=funnel_df["sessions"],
+                textinfo="value+percent initial",
+                marker={"color": ["#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe"]}
+            ))
+            fig.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=350, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig, use_container_width=True)
 
-    business_left, business_right = st.columns(2)
-    with business_left:
-        st.subheader("Business: event share")
-        if event_mix.empty:
-            st.info("No event data available.")
+    with col_r:
+        render_section_header("Top Bounce Pages", icon="exit_to_app")
+        if bounces_df.empty:
+            st.info("No bounces detected.")
         else:
             chart = (
-                alt.Chart(event_mix)
-                .mark_arc(innerRadius=65, outerRadius=115)
+                alt.Chart(bounces_df)
+                .mark_bar(color="#ef4444", cornerRadiusEnd=4)
                 .encode(
-                    theta=alt.Theta("total_events:Q"),
-                    color=alt.Color(
-                        "event_type:N",
-                        title="Event type",
-                        scale=alt.Scale(range=["#d47465", "#66bcc7", "#8ccf68", "#9a68cc", "#cf65b5", "#5f7288"]),
-                    ),
+                    x=alt.X("bounces:Q", title="Bounce Count"),
+                    y=alt.Y("uri:N", sort="-x", title=None),
                     tooltip=[
-                        alt.Tooltip("event_type:N", title="Event"),
-                        alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
-                    ],
+                        alt.Tooltip("uri:N", title="Page URI"),
+                        alt.Tooltip("bounces:Q", title="Bounce Count", format=",.0f"),
+                    ]
                 )
-                .properties(height=280)
+                .properties(height=350)
             )
             st.altair_chart(chart, width="stretch")
 
-    with business_right:
-        st.subheader("Business: purchases over time")
-        if business_windows.empty:
-            st.info("No realtime windows available.")
-        else:
-            chart = (
-                alt.Chart(business_windows)
-                .mark_line(color="#d36c42", strokeWidth=2.3)
-                .encode(
-                    x=alt.X("window_start:T", title=None),
-                    y=alt.Y("purchase_events:Q", title="Purchases"),
-                    tooltip=[
-                        alt.Tooltip("window_start:T", title="Window"),
-                        alt.Tooltip("total_events:Q", title="Events", format=",.0f"),
-                        alt.Tooltip("purchase_events:Q", title="Purchases", format=",.0f"),
-                    ],
-                )
-                .properties(height=280)
-            )
-            st.altair_chart(chart, width="stretch")
-
+    render_section_header("Pipeline Operations", icon="settings")
     ops_cols = st.columns(4)
-    render_kpi_card(ops_cols[0], "Processing freshness", fmt_seconds(freshness.get("processing_freshness_seconds")), "Latest processing_time")
-    render_kpi_card(ops_cols[1], "Aggregate freshness", fmt_seconds(freshness.get("aggregate_freshness_seconds")), "Latest 5m emit")
-    render_kpi_card(ops_cols[2], "P95 lag", fmt_seconds(freshness.get("p95_event_lag_seconds")), "Event to processing")
-    render_kpi_card(ops_cols[3], "Reject rate", f"{float(quality.get('reject_rate') or 0):.2%}", "Dead-letter ratio")
+    render_kpi_card(ops_cols[0], "Proc. Lag", fmt_seconds(freshness.get("processing_freshness_seconds")), "Latency")
+    render_kpi_card(ops_cols[1], "Agg. Freshness", fmt_seconds(freshness.get("aggregate_freshness_seconds")), "DWH Delay")
+    render_kpi_card(ops_cols[2], "Throughput", f"{throughput['events_per_second'].mean():.1f} eps", "Avg events/sec")
+    render_kpi_card(ops_cols[3], "DLQ Rate", f"{float(quality.get('reject_rate') or 0):.2%}", "Reject rate")
 
-    ops_left, ops_right = st.columns(2)
-    with ops_left:
-        st.subheader("Ops: throughput and lag")
-        if throughput.empty:
-            st.info("No throughput data available.")
-        else:
-            base = alt.Chart(throughput).encode(x=alt.X("window_start:T", title=None))
-            events = base.mark_area(color="#8db5d9", opacity=0.65, line={"color": "#315f8c"}).encode(
-                y=alt.Y("events_per_second:Q", title="Events/sec"),
-                tooltip=[
-                    alt.Tooltip("window_start:T", title="Window"),
-                    alt.Tooltip("events_per_second:Q", title="Events/sec", format=",.2f"),
-                    alt.Tooltip("avg_event_lag_seconds:Q", title="Avg lag (s)", format=",.1f"),
-                ],
-            )
-            lag = base.mark_line(color="#c96a50", strokeWidth=2).encode(
-                y=alt.Y("avg_event_lag_seconds:Q", title="Avg lag (s)")
-            )
-            st.altair_chart(alt.layer(events, lag).resolve_scale(y="independent").properties(height=280), width="stretch")
+    if not throughput.empty:
+        render_section_header("Throughput & Event Lag Trend", icon="speed")
+        base = alt.Chart(throughput).encode(x=alt.X("window_start:T", title=None))
+        events = base.mark_area(color="#3b82f6", opacity=0.3).encode(y=alt.Y("events_per_second:Q", title="EPS"))
+        lag = base.mark_line(color="#ef4444", strokeWidth=2).encode(y=alt.Y("avg_event_lag_seconds:Q", title="Lag (s)"))
+        st.altair_chart(alt.layer(events, lag).resolve_scale(y="independent").properties(height=300), width="stretch")
 
-    with ops_right:
-        st.subheader("Ops: quality checks")
-        quality_rows = pd.DataFrame(
-            [
-                {"Check": "Raw rows", "Value": fmt_int(quality.get("raw_rows"))},
-                {"Check": "Duplicate rows removed", "Value": fmt_int(quality.get("duplicate_rows_removed"))},
-                {"Check": "Missing session_id", "Value": fmt_int(quality.get("missing_session_id"))},
-                {"Check": "Missing user_id", "Value": fmt_int(quality.get("missing_user_id"))},
-                {"Check": "Negative lag events", "Value": fmt_int(quality.get("negative_lag_events"))},
-                {"Check": "Latest 5m window", "Value": str(freshness.get("latest_window_start") or "None")},
-            ]
-        )
-        st.dataframe(quality_rows, width="stretch", hide_index=True)
+    with st.expander("🛠️ Testing Guide", expanded=False):
+        st.code("""
+# Start Dataflow
+.\\src\\clickstream\\run_clickstream_pipeline.ps1
+
+# Generate Data
+cd datagen
+.\\manage_data.ps1 -Action gen-events
+        """, language="powershell")
 
 
 render_dashboard()

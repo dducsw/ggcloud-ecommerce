@@ -15,6 +15,7 @@ def load_dashboard_data(start_date: str, end_date: str) -> dict:
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         futures = {
             "kpis": executor.submit(data_provider.get_sales_kpis, start_date, end_date),
+            "comparison": executor.submit(data_provider.get_sales_comparison, start_date, end_date),
             "trend": executor.submit(data_provider.get_revenue_trend, start_date, end_date),
             "top_products": executor.submit(data_provider.get_top_products, start_date, end_date),
             "order_values": executor.submit(data_provider.get_order_value_distribution, start_date, end_date),
@@ -46,6 +47,7 @@ def normalize_money_values(values: pd.Series) -> tuple[pd.Series, float]:
 def render_dashboard() -> None:
     data = load_dashboard_data(query_start_date, query_end_date)
     kpi_df = data["kpis"]
+    comp_df = data["comparison"]
     trend_df = data["trend"]
     top_products_df = data["top_products"]
     order_values_df = data["order_values"]
@@ -54,13 +56,19 @@ def render_dashboard() -> None:
     orders_by_city_df = data["orders_by_city"]
 
     kpis = kpi_df.iloc[0].to_dict() if not kpi_df.empty else {}
-    kpi_cols = st.columns(4)
-    render_kpi_card(kpi_cols[0], "Total Revenue", f"${float(kpis.get('revenue') or 0):,.0f}", "Gross sales value")
-    render_kpi_card(kpi_cols[1], "Gross Margin", f"${float(kpis.get('margin') or 0):,.0f}", "Revenue - Cost")
-    render_kpi_card(kpi_cols[2], "Margin Rate", f"{float(kpis.get('margin_rate') or 0):.1%}", "Profitability ratio")
-    render_kpi_card(kpi_cols[3], "Total Orders", fmt_int(kpis.get("orders")), "Success orders")
+    comp = comp_df.iloc[0].to_dict() if not comp_df.empty else {}
+    
+    def fmt_growth(val):
+        if pd.isna(val): return None
+        return f"{'+' if val >= 0 else ''}{val:.1%}"
 
-    st.subheader("Revenue and Margin Trend")
+    kpi_cols = st.columns(4)
+    render_kpi_card(kpi_cols[0], "Revenue", f"${float(kpis.get('revenue') or 0):,.0f}", "Gross sales", delta=fmt_growth(comp.get("revenue_growth")))
+    render_kpi_card(kpi_cols[1], "AOV", f"${float(kpis.get('aov') or 0):,.2f}", "Avg order value", delta=fmt_growth(comp.get("aov_growth")))
+    render_kpi_card(kpi_cols[2], "Orders", fmt_int(kpis.get("orders")), "Total successful", delta=fmt_growth(comp.get("orders_growth")))
+    render_kpi_card(kpi_cols[3], "Margin Rate", f"{float(kpis.get('margin_rate') or 0):.1%}", "Net profitability")
+
+    render_section_header("Revenue and Margin Trend", icon="trending_up")
     if trend_df.empty:
         st.info("No revenue trend data for the selected date range.")
     else:
@@ -72,197 +80,110 @@ def render_dashboard() -> None:
         )
         chart = (
             alt.Chart(trend_long)
-            .mark_area(opacity=0.68, line=True)
+            .mark_area(opacity=0.4, line={"strokeWidth": 2})
             .encode(
                 x=alt.X("date:T", title=None),
-                y=alt.Y("value:Q", stack=None, title="Amount ($)"),
+                y=alt.Y("value:Q", stack=None, title=None),
                 color=alt.Color(
                     "metric:N",
-                    title="Metric",
-                    scale=alt.Scale(range=["#315f8c", "#c96a50"]),
+                    title=None,
+                    scale=alt.Scale(range=["#3b82f6", "#f59e0b"]),
                 ),
                 tooltip=[
                     alt.Tooltip("date:T", title="Date"),
                     alt.Tooltip("metric:N", title="Metric"),
-                    alt.Tooltip("value:Q", title="Amount", format=",.0f"),
+                    alt.Tooltip("value:Q", title="Amount", format="$,.0f"),
                 ],
             )
-            .properties(height=300)
+            .properties(height=320)
+            .interactive()
         )
         st.altair_chart(chart, width="stretch")
 
-    st.subheader("Top Products by Revenue and Margin")
+    render_section_header("Top Products by Performance", icon="inventory_2")
     if top_products_df.empty:
         st.info("No product data available for the selected period.")
     else:
-        top_products = top_products_df.sort_values("revenue", ascending=False).head(12).copy()
-        top_products["display_name"] = top_products["product_name"].str.slice(0, 34)
-        product_metrics = top_products.melt(
-            id_vars=["product_name", "display_name", "category", "items_sold"],
-            value_vars=["revenue", "margin"],
-            var_name="metric",
-            value_name="amount",
-        )
+        top_products = top_products_df.sort_values("revenue", ascending=False).head(10).copy()
+        top_products["display_name"] = top_products["product_name"].str.slice(0, 40)
+        
         product_chart = (
-            alt.Chart(product_metrics)
-            .mark_bar()
+            alt.Chart(top_products)
+            .mark_bar(cornerRadiusEnd=4)
             .encode(
-                x=alt.X("amount:Q", title="Amount ($)"),
-                y=alt.Y("display_name:N", sort=top_products["display_name"].tolist(), title=None),
-                yOffset="metric:N",
-                color=alt.Color(
-                    "metric:N",
-                    title="Metric",
-                    scale=alt.Scale(domain=["revenue", "margin"], range=["#8db5d9", "#c96a50"]),
-                ),
+                x=alt.X("revenue:Q", title="Revenue ($)"),
+                y=alt.Y("display_name:N", sort="-x", title=None),
+                color=alt.Color("margin:Q", scale=alt.Scale(scheme="blues"), title="Margin ($)"),
                 tooltip=[
                     alt.Tooltip("product_name:N", title="Product"),
                     alt.Tooltip("category:N", title="Category"),
-                    alt.Tooltip("metric:N", title="Metric"),
-                    alt.Tooltip("amount:Q", title="Amount", format=",.0f"),
-                    alt.Tooltip("items_sold:Q", title="Items sold", format=",.0f"),
+                    alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f"),
+                    alt.Tooltip("margin:Q", title="Margin", format="$,.0f"),
+                    alt.Tooltip("items_sold:Q", title="Volume", format=",.0f"),
                 ],
             )
-            .properties(height=420)
+            .properties(height=400)
         )
         st.altair_chart(product_chart, width="stretch")
 
-    st.subheader("Order Value Distribution")
-    if order_values_df.empty:
-        st.info("No order value data available for the selected period.")
-    else:
-        histogram_df = order_values_df.copy()
-        histogram_df["order_value_usd"], _ = normalize_money_values(histogram_df["order_value"])
-        histogram_df = histogram_df[histogram_df["order_value_usd"] > 0]
-        p99_order_value = histogram_df["order_value_usd"].quantile(0.99) if not histogram_df.empty else 0
-        if p99_order_value > 0:
-            histogram_df = histogram_df[histogram_df["order_value_usd"] <= p99_order_value]
-        if histogram_df.empty:
-            st.info("No positive order value data available for the selected period.")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        render_section_header("Order Value Distribution", icon="bar_chart")
+        if order_values_df.empty:
+            st.info("No order value data.")
         else:
             histogram = (
-                alt.Chart(histogram_df)
-                .mark_bar(color="#315f8c")
+                alt.Chart(order_values_df)
+                .mark_bar(color="#3b82f6", opacity=0.8, cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
                 .encode(
-                    x=alt.X("order_value_usd:Q", bin=alt.Bin(maxbins=30), title="Order value ($)"),
+                    x=alt.X("order_value:Q", bin=alt.Bin(maxbins=25), title="Order Value ($)"),
                     y=alt.Y("count():Q", title="Orders"),
-                    tooltip=[
-                        alt.Tooltip("count():Q", title="Orders", format=",.0f"),
-                        alt.Tooltip("order_value_usd:Q", title="Order value", bin=True, format=",.2f"),
-                    ],
                 )
-                .properties(height=300)
+                .properties(height=280)
             )
             st.altair_chart(histogram, width="stretch")
 
-    bar_left, bar_right = st.columns(2)
-    with bar_left:
-        st.subheader("Orders by Status")
+    with col_r:
+        render_section_header("Orders by Status", icon="pie_chart")
         if order_status_df.empty:
-            st.info("No order status data available.")
+            st.info("No status data.")
         else:
             status_chart = (
                 alt.Chart(order_status_df)
-                .mark_arc(innerRadius=62, outerRadius=118)
+                .mark_arc(innerRadius=70, outerRadius=110, cornerRadius=4)
                 .encode(
                     theta=alt.Theta("order_count:Q"),
-                    color=alt.Color(
-                        "status:N",
-                        title="Status",
-                        scale=alt.Scale(range=["#315f8c", "#8db5d9", "#c96a50", "#a6d854", "#7d5ba6"]),
-                    ),
+                    color=alt.Color("status:N", scale=alt.Scale(scheme="tableau10"), title=None),
                     tooltip=[
                         alt.Tooltip("status:N", title="Status"),
-                        alt.Tooltip("order_count:Q", title="Orders", format=",.0f"),
-                    ],
+                        alt.Tooltip("order_count:Q", title="Order Count", format=",.0f"),
+                    ]
                 )
-                .properties(height=320)
+                .properties(height=280)
             )
             st.altair_chart(status_chart, width="stretch")
 
-    with bar_right:
-        st.subheader("Orders by Type")
-        if order_type_df.empty:
-            st.info("No order type data available.")
-        else:
-            type_chart = (
-                alt.Chart(order_type_df)
-                .mark_arc(innerRadius=62, outerRadius=118)
-                .encode(
-                    theta=alt.Theta("order_count:Q"),
-                    color=alt.Color(
-                        "order_type:N",
-                        title="Order type",
-                        scale=alt.Scale(range=["#c96a50", "#315f8c", "#8db5d9"]),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("order_type:N", title="Order type"),
-                        alt.Tooltip("order_count:Q", title="Orders", format=",.0f"),
-                    ],
-                )
-                .properties(height=320)
-            )
-            st.altair_chart(type_chart, width="stretch")
-
-    st.subheader("Customer Order Locations")
+    render_section_header("Customer Geography", icon="public")
     if orders_by_city_df.empty:
-        st.info("No location data available for the selected period.")
+        st.info("No location data.")
     else:
-        map_df = orders_by_city_df.copy()
-        map_df = map_df[
-            (map_df["latitude"].notna())
-            & (map_df["longitude"].notna())
-            & (map_df["latitude"] != 0)
-            & (map_df["longitude"] != 0)
-        ].rename(columns={"latitude": "lat", "longitude": "lon"})
-        if map_df.empty:
-            st.info("No valid latitude/longitude data available for the selected period.")
-        else:
-            map_df["heat_score"] = (
-                map_df["order_count"].astype(float) + map_df["user_count"].astype(float)
-            ).clip(lower=1)
-            max_score = float(map_df["heat_score"].max() or 1)
-            map_df["radius"] = 45000 + ((map_df["heat_score"] / max_score) ** 0.52) * 260000
-            map_df["fill_color"] = map_df["heat_score"].map(
-                lambda score: [207, 55, 24, int(95 + 145 * ((float(score) / max_score) ** 0.35))]
-            )
-            view_state = pdk.ViewState(
-                latitude=float(map_df["lat"].mean()),
-                longitude=float(map_df["lon"].mean()),
-                zoom=2.2,
-                pitch=0,
-            )
+        map_df = orders_by_city_df.rename(columns={"latitude": "lat", "longitude": "lon"}).dropna(subset=["lat", "lon"])
+        if not map_df.empty:
+            view_state = pdk.ViewState(latitude=map_df["lat"].mean(), longitude=map_df["lon"].mean(), zoom=1.5)
             layer = pdk.Layer(
                 "ScatterplotLayer",
-                data=map_df,
+                map_df,
                 get_position="[lon, lat]",
-                get_radius="radius",
-                get_fill_color="fill_color",
+                get_radius=50000,
+                get_fill_color=[59, 130, 246, 160],
                 pickable=True,
-                opacity=0.82,
-                stroked=True,
-                get_line_color=[120, 25, 12, 180],
-                line_width_min_pixels=1,
             )
-            deck = pdk.Deck(
-                map_style=None,
-                initial_view_state=view_state,
-                layers=[layer],
-                tooltip={
-                    "html": "<b>{city}</b><br/>Orders: {order_count}<br/>Users: {user_count}",
-                    "style": {"backgroundColor": "#172231", "color": "white"},
-                },
-            )
-            st.pydeck_chart(
-                deck,
-                width="stretch",
-                height=560,
-            )
+            st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=True))
 
 
+from utils.theme import render_page_header, render_section_header
 apply_theme()
-st.title("Sales Performance")
-st.caption("Revenue, margin and product contribution for the selected business window.")
+render_page_header("Sales Performance", "Executive overview of revenue, margins, and growth trends.", icon="payments")
 
 with st.sidebar:
     st.markdown("---")

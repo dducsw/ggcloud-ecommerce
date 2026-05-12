@@ -18,7 +18,7 @@ def build_funnel_sankey(funnel_df: pd.DataFrame) -> go.Figure:
     source = list(range(max(len(stages) - 1, 0)))
     target = list(range(1, len(stages)))
     link_values = [values[idx + 1] for idx in source]
-    palette = ["#ff9f1c", "#66c7c7", "#a6d854", "#006bd6"]
+    palette = ["#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe"]
 
     fig = go.Figure(
         data=[
@@ -37,25 +37,19 @@ def build_funnel_sankey(funnel_df: pd.DataFrame) -> go.Figure:
                     "source": source,
                     "target": target,
                     "value": link_values,
-                    "color": [
-                        "rgba(255, 159, 28, 0.42)",
-                        "rgba(102, 199, 199, 0.42)",
-                        "rgba(166, 216, 84, 0.42)",
-                    ][: len(link_values)],
+                    "color": "rgba(59, 130, 246, 0.2)",
                 },
             )
         ]
     )
     fig.update_layout(
         height=280,
-        margin={"l": 4, "r": 12, "t": 4, "b": 4},
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#dbeafe", "size": 13},
+        font={"color": "#0f172a", "size": 13},
     )
     return fig
-
-
 @st.cache_data(ttl=60, show_spinner=False)
 def load_dashboard_data(start_date: str, end_date: str, traffic_filter: tuple[str, ...]) -> dict:
     traffic_sources = list(traffic_filter)
@@ -72,46 +66,42 @@ def load_dashboard_data(start_date: str, end_date: str, traffic_filter: tuple[st
         return {key: future.result() for key, future in futures.items()}
 
 
+def resolve_active_window(window_days: int = 1) -> tuple[str, str]:
+    active_start = st.session_state.get("start_date")
+    active_end = st.session_state.get("end_date")
+    if not active_start or not active_end:
+        active_start, active_end = data_provider.get_default_date_range(window_days=window_days)
+    return str(active_start), str(active_end)
+
+
+session_presets = {
+    "Last 1h": dt.timedelta(hours=1),
+    "Last 6h": dt.timedelta(hours=6),
+    "Last 1d": dt.timedelta(days=1),
+    "Last 7d": dt.timedelta(days=7),
+    "Custom": None,
+}
+
+from utils.theme import render_page_header, render_section_header
 apply_theme()
-st.title("Session Analysis")
+render_page_header("Session Analysis", "In-depth exploration of user journeys, session quality, and conversion paths.", icon="explore")
 
 with st.sidebar:
     st.markdown("---")
     st.subheader("Session controls")
-    auto_refresh = st.toggle("Auto-refresh every 60s", value=True)
-    if st.button("Refresh session view"):
+    auto_refresh = st.toggle("Auto-refresh (60s)", value=True)
+    if st.button("Refresh view"):
         st.cache_data.clear()
         st.rerun()
 
-active_start = st.session_state.get("start_date")
-active_end = st.session_state.get("end_date")
-
-if not active_start or not active_end:
-    active_start, active_end = data_provider.get_default_date_range(window_days=1)
-    active_start, active_end = str(active_start), str(active_end)
-
-start_date = str(active_start)
-end_date = str(active_end)
-
-session_presets = {
-    "Last 1 hour": dt.timedelta(hours=1),
-    "Last 6 hours": dt.timedelta(hours=6),
-    "Last 1 day": dt.timedelta(days=1),
-    "Last 7 days": dt.timedelta(days=7),
-    "Last 30 days": dt.timedelta(days=30),
-    "Custom range": None,
-}
-
-range_presets = session_presets.copy()
-latest_ts = data_provider.get_latest_session_timestamp()
-
+start_date, end_date = resolve_active_window(window_days=1)
 range_start, range_end = select_time_range(
-    start_date, 
-    end_date, 
+    str(start_date), 
+    str(end_date), 
     key_prefix="session", 
-    presets=range_presets, 
-    reference_time=latest_ts,
-    default_index=2 # Default to Last 1 day
+    presets=session_presets, 
+    reference_time=data_provider.get_latest_session_timestamp(),
+    default_index=2
 )
 query_start_date = str(range_start.date())
 query_end_date = str(range_end.date())
@@ -132,123 +122,56 @@ def render_dashboard():
     if not session_trend.empty:
         summary["total_sessions"] = session_trend["sessions"].sum()
 
+    render_section_header("Session Insights", icon="insights")
     business_cols = st.columns(4)
-    render_kpi_card(business_cols[0], "Sessions", fmt_int(summary.get("total_sessions")), "Latest session view")
-    render_kpi_card(business_cols[1], "Avg duration", fmt_seconds(summary.get("avg_session_seconds")), "Business engagement")
-    render_kpi_card(business_cols[2], "Cart rate", f"{float(summary.get('cart_rate') or 0):.2%}", "Reached cart")
-    render_kpi_card(business_cols[3], "Purchase/session", f"{float(summary.get('conversion_rate') or 0):.2%}", "Purchased sessions")
+    render_kpi_card(business_cols[0], "Sessions", fmt_int(summary.get("total_sessions")), "In selection")
+    render_kpi_card(business_cols[1], "Avg duration", fmt_seconds(summary.get("avg_session_seconds")), "Per session")
+    render_kpi_card(business_cols[2], "Cart rate", f"{float(summary.get('cart_rate') or 0):.2%}", "Added to cart")
+    render_kpi_card(business_cols[3], "Conv. Rate", f"{float(summary.get('conversion_rate') or 0):.2%}", "Purchases")
 
-    business_left, business_right = st.columns(2)
-    with business_left:
-        st.subheader("Business: session funnel")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        render_section_header("Conversion Funnel", icon="account_tree")
         if funnel.empty:
-            st.info("No funnel data available.")
+            st.info("No data.")
         else:
-            st.plotly_chart(build_funnel_sankey(funnel), width="stretch")
+            st.plotly_chart(build_funnel_sankey(funnel), use_container_width=True)
 
-    with business_right:
-        st.subheader("Business: top category interest")
+    with col_r:
+        render_section_header("Top Category Interest", icon="pie_chart")
         if categories.empty:
-            st.info("No category data available.")
+            st.info("No data.")
         else:
-            category_chart = (
-                alt.Chart(categories.head(10))
-                .mark_arc(innerRadius=60, outerRadius=110)
+            chart = (
+                alt.Chart(categories.head(8))
+                .mark_arc(innerRadius=60, outerRadius=110, cornerRadius=4)
                 .encode(
                     theta=alt.Theta("sessions:Q"),
-                    color=alt.Color(
-                        "top_category:N",
-                        title="Category",
-                        scale=alt.Scale(scheme="tableau10"),
-                    ),
+                    color=alt.Color("top_category:N", scale=alt.Scale(scheme="blues"), title=None),
                     tooltip=[
                         alt.Tooltip("top_category:N", title="Category"),
                         alt.Tooltip("sessions:Q", title="Sessions", format=",.0f"),
-                        alt.Tooltip("avg_product_views:Q", title="Avg product views", format=",.2f"),
-                        alt.Tooltip("conversion_rate:Q", title="Purchase/session", format=".2%"),
-                    ],
+                    ]
                 )
                 .properties(height=280)
             )
-            st.altair_chart(category_chart, width="stretch")
+            st.altair_chart(chart, width="stretch")
 
-    st.subheader("Business: sessions and purchases over time")
+    render_section_header("Session & Purchase Volume", icon="show_chart")
     if session_trend.empty:
-        st.info("No session trend data available.")
+        st.info("No trend data.")
     else:
         base = alt.Chart(session_trend).encode(x=alt.X("session_hour:T", title=None))
-        session_line = base.mark_line(color="#315f8c", strokeWidth=2.4).encode(
-            y=alt.Y("sessions:Q", title="Sessions"),
-            tooltip=[
-                alt.Tooltip("session_hour:T", title="Hour"),
-                alt.Tooltip("sessions:Q", title="Sessions", format=",.0f"),
-                alt.Tooltip("purchased_sessions:Q", title="Purchased sessions", format=",.0f"),
-            ],
-        )
-        purchase_line = base.mark_line(color="#d36c42", strokeWidth=2.2).encode(
-            y=alt.Y("purchased_sessions:Q", title="Purchased sessions")
-        )
-        st.altair_chart(
-            alt.layer(session_line, purchase_line).resolve_scale(y="independent").properties(height=260),
-            width="stretch",
-        )
+        session_line = base.mark_area(color="#3b82f6", opacity=0.3).encode(y=alt.Y("sessions:Q", title="Volume"))
+        purchase_line = base.mark_line(color="#ef4444", strokeWidth=2).encode(y=alt.Y("purchased_sessions:Q", title="Purchases"))
+        st.altair_chart(alt.layer(session_line, purchase_line).resolve_scale(y="independent").properties(height=260), width="stretch")
 
+    render_section_header("Sessionization Quality", icon="admin_panel_settings")
     ops_cols = st.columns(4)
-    render_kpi_card(ops_cols[0], "Session freshness", fmt_seconds(health.get("session_freshness_seconds")), "Latest processed_at")
-    render_kpi_card(ops_cols[1], "Metric versions", fmt_int(health.get("session_metric_versions")), "Raw session_metrics")
-    render_kpi_card(ops_cols[2], "Superseded rate", f"{float(health.get('superseded_version_rate') or 0):.2%}", "Late updates")
-    render_kpi_card(ops_cols[3], "P95 events/session", fmt_int(health.get("p95_events_per_session")), "Depth quality")
-
-    ops_left, ops_right = st.columns(2)
-    with ops_left:
-        st.subheader("Ops: sessionization output")
-        if timeseries.empty:
-            st.info("No sessionization data available.")
-        else:
-            base = alt.Chart(timeseries).encode(x=alt.X("session_hour:T", title=None))
-            sessions = base.mark_area(color="#8db5d9", opacity=0.65, line={"color": "#315f8c"}).encode(
-                y=alt.Y("sessions:Q", title="Sessions"),
-                tooltip=[
-                    alt.Tooltip("session_hour:T", title="Hour"),
-                    alt.Tooltip("sessions:Q", title="Sessions", format=",.0f"),
-                    alt.Tooltip("events_in_sessions:Q", title="Events in sessions", format=",.0f"),
-                    alt.Tooltip("avg_events_per_session:Q", title="Avg events/session", format=",.2f"),
-                ],
-            )
-            avg_events = base.mark_line(color="#c96a50", strokeWidth=2).encode(
-                y=alt.Y("avg_events_per_session:Q", title="Avg events/session")
-            )
-            st.altair_chart(alt.layer(sessions, avg_events).resolve_scale(y="independent").properties(height=280), width="stretch")
-
-    with ops_right:
-        st.subheader("Ops: session quality checks")
-        if anomalies.empty:
-            st.info("No anomaly data available.")
-        else:
-            anomaly_chart = (
-                alt.Chart(anomalies)
-                .mark_bar(color="#c96a50")
-                .encode(
-                    x=alt.X("sessions:Q", title="Sessions"),
-                    y=alt.Y("check_name:N", sort="-x", title=None),
-                    tooltip=[
-                        alt.Tooltip("check_name:N", title="Check"),
-                        alt.Tooltip("sessions:Q", title="Sessions", format=",.0f"),
-                    ],
-                )
-                .properties(height=220)
-            )
-            st.altair_chart(anomaly_chart, width="stretch")
-
-        state_rows = pd.DataFrame(
-            [
-                {"Check": "Latest session_end", "Value": str(health.get("latest_session_end") or "None")},
-                {"Check": "Latest version_emitted_at", "Value": str(health.get("latest_version_emitted_at") or "None")},
-                {"Check": "Missing session_id", "Value": fmt_int(health.get("missing_session_id"))},
-                {"Check": "Negative durations", "Value": fmt_int(health.get("negative_duration_sessions"))},
-            ]
-        )
-        st.dataframe(state_rows, width="stretch", hide_index=True)
+    render_kpi_card(ops_cols[0], "Freshness", fmt_seconds(health.get("session_freshness_seconds")), "Metric lag")
+    render_kpi_card(ops_cols[1], "Metric versions", fmt_int(health.get("session_metric_versions")), "Output count")
+    render_kpi_card(ops_cols[2], "Superseded", f"{float(health.get('superseded_version_rate') or 0):.2%}", "Update rate")
+    render_kpi_card(ops_cols[3], "P95 Depth", fmt_int(health.get("p95_events_per_session")), "Events/session")
 
 
 render_dashboard()

@@ -6,7 +6,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 from psycopg2.extras import execute_values
 
-from src.models import User, Order, OrderItem, Event, get_additional_ddls
+from thelook_src.models import User, Order, OrderItem, Event, get_additional_ddls
 
 logging.basicConfig(
     level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"

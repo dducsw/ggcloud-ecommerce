@@ -139,14 +139,22 @@ def fmt_seconds(value) -> str:
         return f"{value:.1f}s"
     return f"{value / 60:.1f}m"
 
-def render_kpi_card(column, label: str, value: str, subtitle: str) -> None:
-    column.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div style="color: #bdd0ee; font-size: 0.8rem; margin-top: 4px;">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def render_kpi_card(column, label: str, value: str, subtitle: str, delta: str = None, delta_color: str = "normal") -> None:
+    delta_html = ""
+    if delta:
+        color_map = {
+            "normal": "#64748b",
+            "inverse": "#64748b",
+        }
+        # Simple logic for green/red if not specified
+        if delta.startswith("+") or "↑" in delta:
+            color = "#10b981" if delta_color == "normal" else "#ef4444"
+        elif delta.startswith("-") or "↓" in delta:
+            color = "#ef4444" if delta_color == "normal" else "#10b981"
+        else:
+            color = color_map.get(delta_color, "#64748b")
+            
+        delta_html = f'<span style="color: {color}; font-size: 0.85rem; font-weight: 600; margin-left: 8px;">{delta}</span>'
+
+    html_content = f"""<div class="metric-card"><div class="metric-label">{label}</div><div style="display: flex; align-items: baseline;"><div class="metric-value">{value}</div>{delta_html}</div><div class="metric-subtitle">{subtitle}</div></div>"""
+    column.markdown(html_content, unsafe_allow_html=True)

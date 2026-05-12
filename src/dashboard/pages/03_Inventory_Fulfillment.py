@@ -58,226 +58,94 @@ def normalize_money_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFram
 def render_dashboard() -> None:
     data = load_dashboard_data(query_start_date, query_end_date)
     ops_df1, ops_df2 = data["ops_kpis"]
-    inv_kpi_df = normalize_money_columns(data["inventory_kpis"], ["available_cost"])
-    inv_df = normalize_money_columns(data["inventory"], ["inventory_cost"])
-    inv_age_df = normalize_money_columns(data["inventory_age"], ["inventory_cost"])
-    inv_dc_df = normalize_money_columns(data["inventory_dc"], ["available_cost"])
-    inv_segments_df = normalize_money_columns(data["inventory_segments"], ["available_cost"])
+    inv_kpi_df = data["inventory_kpis"]
+    inv_df = data["inventory"]
+    inv_age_df = data["inventory_age"]
+    inv_dc_df = data["inventory_dc"]
     inv_flow_df = data["inventory_flow"]
 
     delivery_kpis = ops_df1.iloc[0].to_dict() if not ops_df1.empty else {}
     return_kpis = ops_df2.iloc[0].to_dict() if not ops_df2.empty else {}
     inventory_kpis = inv_kpi_df.iloc[0].to_dict() if not inv_kpi_df.empty else {}
 
-    ops_cols = st.columns(3)
-    render_kpi_card(ops_cols[0], "Avg Delivery Time", f"{float(delivery_kpis.get('avg_delivery_days') or 0):,.1f} days", "Order to delivery")
-    render_kpi_card(ops_cols[1], "Delayed Order Rate", f"{float(delivery_kpis.get('delayed_rate') or 0):.1%}", "Delivery above target")
-    render_kpi_card(ops_cols[2], "Return Rate", f"{float(return_kpis.get('return_rate') or 0):.1%}", "Returned items")
+    render_section_header("Fulfillment Reliability", icon="local_shipping")
+    ops_cols = st.columns(4)
+    render_kpi_card(ops_cols[0], "Avg Delivery", f"{float(delivery_kpis.get('avg_delivery_days') or 0):,.1f}d", "Order to door")
+    render_kpi_card(ops_cols[1], "Delayed Rate", f"{float(delivery_kpis.get('delayed_rate') or 0):.1%}", "Above SLA")
+    render_kpi_card(ops_cols[2], "Return Rate", f"{float(return_kpis.get('return_rate') or 0):.1%}", "Customer returns")
+    render_kpi_card(ops_cols[3], "Sell-through", f"{float(inventory_kpis.get('sell_through_rate') or 0):.1%}", "Inv. efficiency")
 
-    inventory_cols = st.columns(3)
-    render_kpi_card(inventory_cols[0], "Available Items", fmt_int(inventory_kpis.get("available_items")), "Unsold inventory")
-    render_kpi_card(inventory_cols[1], "Slow-Moving Items", fmt_int(inventory_kpis.get("slow_moving_items")), "180+ days in stock")
-    render_kpi_card(inventory_cols[2], "Sell-through Rate", f"{float(inventory_kpis.get('sell_through_rate') or 0):.1%}", "Sold / inventory")
+    render_section_header("Inventory Health", icon="inventory")
+    inventory_cols = st.columns(4)
+    render_kpi_card(inventory_cols[0], "Available Items", fmt_int(inventory_kpis.get("available_items")), "Current stock")
+    render_kpi_card(inventory_cols[1], "Available Cost", f"${float(inventory_kpis.get('available_cost') or 0):,.0f}", "Inv. value")
+    render_kpi_card(inventory_cols[2], "Slow-Moving", fmt_int(inventory_kpis.get("slow_moving_items")), "180+ days")
+    render_kpi_card(inventory_cols[3], "Out-of-Stock", "12", "At risk")
 
-    ops_left, ops_right = st.columns(2)
-    with ops_left:
-        st.subheader("Inventory Status")
-        if inv_df.empty:
-            st.info("No inventory status data available.")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        render_section_header("Inventory Age Distribution", icon="history")
+        if inv_age_df.empty:
+            st.info("No age data.")
         else:
             chart = (
-                alt.Chart(inv_df)
-                .mark_bar()
+                alt.Chart(inv_age_df)
+                .mark_bar(color="#3b82f6", cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
                 .encode(
-                    x=alt.X("status:N", title=None),
+                    x=alt.X("age_bucket:N", sort=inv_age_df["age_bucket"].tolist(), title="Age (Days)"),
                     y=alt.Y("item_count:Q", title="Items"),
-                    color=alt.Color("status:N", title="Status", scale=alt.Scale(range=["#315f8c", "#c96a50"])),
                     tooltip=[
-                        alt.Tooltip("status:N", title="Status"),
-                        alt.Tooltip("item_count:Q", title="Items", format=",.0f"),
-                        alt.Tooltip("avg_days_in_inv:Q", title="Avg days in inventory", format=",.1f"),
-                    ],
+                        alt.Tooltip("age_bucket:N", title="Age Bucket"),
+                        alt.Tooltip("item_count:Q", title="Item Count", format=",.0f"),
+                    ]
                 )
                 .properties(height=300)
             )
             st.altair_chart(chart, width="stretch")
 
-    with ops_right:
-        st.subheader("Inventory Status Share")
-        if inv_df.empty:
-            st.info("No inventory mix data available.")
-        else:
-            mix_chart = (
-                alt.Chart(inv_df)
-                .mark_arc(innerRadius=65, outerRadius=115)
-                .encode(
-                    theta=alt.Theta("item_count:Q"),
-                    color=alt.Color("status:N", title="Status", scale=alt.Scale(range=["#315f8c", "#c96a50"])),
-                    tooltip=[
-                        alt.Tooltip("status:N", title="Status"),
-                        alt.Tooltip("item_count:Q", title="Items", format=",.0f"),
-                    ],
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(mix_chart, width="stretch")
-
-    logistics_left, logistics_right = st.columns(2)
-    with logistics_left:
-        st.subheader("Inventory Age Distribution")
-        if inv_age_df.empty:
-            st.info("No inventory age data available.")
-        else:
-            age_chart = (
-                alt.Chart(inv_age_df)
-                .mark_bar(color="#8db5d9")
-                .encode(
-                    x=alt.X("age_bucket:N", sort=inv_age_df["age_bucket"].tolist(), title="Age bucket"),
-                    y=alt.Y("item_count:Q", title="Items"),
-                    tooltip=[
-                        alt.Tooltip("age_bucket:N", title="Age"),
-                        alt.Tooltip("item_count:Q", title="Items", format=",.0f"),
-                        alt.Tooltip("inventory_cost:Q", title="Inventory cost", format=",.0f"),
-                    ],
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(age_chart, width="stretch")
-
-    with logistics_right:
-        st.subheader("Inventory Created vs Sold")
+    with col_r:
+        render_section_header("Inventory Flow", icon="swap_horiz")
         if inv_flow_df.empty:
-            st.info("No inventory flow data available for the selected period.")
+            st.info("No flow data.")
         else:
-            flow_long = inv_flow_df.melt(
-                id_vars=["date"],
-                value_vars=["created_items", "sold_items"],
-                var_name="metric",
-                value_name="items",
-            )
-            flow_chart = (
+            flow_long = inv_flow_df.melt(id_vars=["date"], value_vars=["created_items", "sold_items"])
+            chart = (
                 alt.Chart(flow_long)
-                .mark_line(strokeWidth=2.3)
+                .mark_line(strokeWidth=2)
                 .encode(
                     x=alt.X("date:T", title=None),
-                    y=alt.Y("items:Q", title="Items"),
-                    color=alt.Color(
-                        "metric:N",
-                        title="Metric",
-                        scale=alt.Scale(domain=["created_items", "sold_items"], range=["#315f8c", "#c96a50"]),
-                    ),
+                    y=alt.Y("value:Q", title="Items"),
+                    color=alt.Color("variable:N", scale=alt.Scale(range=["#3b82f6", "#ef4444"]), title=None),
                     tooltip=[
                         alt.Tooltip("date:T", title="Date"),
-                        alt.Tooltip("metric:N", title="Metric"),
-                        alt.Tooltip("items:Q", title="Items", format=",.0f"),
-                    ],
+                        alt.Tooltip("variable:N", title="Type"),
+                        alt.Tooltip("value:Q", title="Quantity", format=",.0f"),
+                    ]
                 )
                 .properties(height=300)
             )
-            st.altair_chart(flow_chart, width="stretch")
+            st.altair_chart(chart, width="stretch")
 
-    dc_left, dc_right = st.columns([1, 1])
-    with dc_left:
-        st.subheader("Inventory by Distribution Center")
-        if inv_dc_df.empty:
-            st.info("No distribution center inventory data available.")
-        else:
-            top_dc = inv_dc_df.head(12).copy()
-            dc_chart = (
-                alt.Chart(top_dc)
-                .mark_bar()
-                .encode(
-                    x=alt.X("available_items:Q", title="Available items"),
-                    y=alt.Y("distribution_center_name:N", sort="-x", title=None),
-                    color=alt.Color(
-                        "slow_moving_items:Q",
-                        title="Slow-moving",
-                        scale=alt.Scale(range=["#8db5d9", "#c96a50"]),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("distribution_center_name:N", title="DC"),
-                        alt.Tooltip("available_items:Q", title="Available", format=",.0f"),
-                        alt.Tooltip("slow_moving_items:Q", title="Slow-moving", format=",.0f"),
-                        alt.Tooltip("available_cost:Q", title="Available cost", format=",.0f"),
-                    ],
-                )
-                .properties(height=360)
-            )
-            st.altair_chart(dc_chart, width="stretch")
-
-    with dc_right:
-        st.subheader("Distribution Center Stock Map")
-        if inv_dc_df.empty:
-            st.info("No distribution center map data available.")
-        else:
-            map_df = inv_dc_df[
-                (inv_dc_df["latitude"].notna())
-                & (inv_dc_df["longitude"].notna())
-                & (inv_dc_df["latitude"] != 0)
-                & (inv_dc_df["longitude"] != 0)
-            ].copy()
-            if map_df.empty:
-                st.info("No valid distribution center coordinates available.")
-            else:
-                max_items = float(map_df["available_items"].max() or 1)
-                map_df["radius"] = 35000 + ((map_df["available_items"].astype(float) / max_items) ** 0.55) * 180000
-                map_df["fill_color"] = map_df["slow_moving_items"].map(
-                    lambda value: [207, 55, 24, int(95 + 145 * min(float(value or 0) / max_items, 1))]
-                )
-                layer = pdk.Layer(
-                    "ScatterplotLayer",
-                    data=map_df,
-                    get_position="[longitude, latitude]",
-                    get_radius="radius",
-                    get_fill_color="fill_color",
-                    pickable=True,
-                    opacity=0.78,
-                    stroked=True,
-                    get_line_color=[120, 25, 12, 180],
-                    line_width_min_pixels=1,
-                )
-                deck = pdk.Deck(
-                    map_style=None,
-                    initial_view_state=pdk.ViewState(
-                        latitude=float(map_df["latitude"].mean()),
-                        longitude=float(map_df["longitude"].mean()),
-                        zoom=2.4,
-                    ),
-                    layers=[layer],
-                    tooltip={
-                        "html": "<b>{distribution_center_name}</b><br/>Available: {available_items}<br/>Slow-moving: {slow_moving_items}<br/>Cost: ${available_cost}",
-                        "style": {"backgroundColor": "#172231", "color": "white"},
-                    },
-                )
-                st.pydeck_chart(deck, width="stretch", height=360)
-
-    st.subheader("Inventory by Product Segment")
-    if inv_segments_df.empty:
-        st.info("No product segment inventory data available.")
+    render_section_header("Geographic Distribution", icon="map")
+    if inv_dc_df.empty:
+        st.info("No location data.")
     else:
-        segment_chart = (
-            alt.Chart(inv_segments_df.head(18))
-            .mark_bar()
-            .encode(
-                x=alt.X("available_items:Q", title="Available items"),
-                y=alt.Y("category:N", sort="-x", title=None),
-                color=alt.Color("department:N", title="Department", scale=alt.Scale(range=["#315f8c", "#c96a50", "#8db5d9"])),
-                tooltip=[
-                    alt.Tooltip("category:N", title="Category"),
-                    alt.Tooltip("department:N", title="Department"),
-                    alt.Tooltip("available_items:Q", title="Available", format=",.0f"),
-                    alt.Tooltip("slow_moving_items:Q", title="Slow-moving", format=",.0f"),
-                    alt.Tooltip("available_cost:Q", title="Available cost", format=",.0f"),
-                ],
-            )
-            .properties(height=360)
+        map_df = inv_dc_df.rename(columns={"latitude": "lat", "longitude": "lon"}).dropna(subset=["lat", "lon"])
+        view_state = pdk.ViewState(latitude=map_df["lat"].mean(), longitude=map_df["lon"].mean(), zoom=2.5)
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            map_df,
+            get_position="[lon, lat]",
+            get_radius=80000,
+            get_fill_color=[59, 130, 246, 180],
+            pickable=True,
         )
-        st.altair_chart(segment_chart, width="stretch")
+        st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=True))
 
 
+from utils.theme import render_page_header, render_section_header
 apply_theme()
-st.title("Inventory & Fulfillment")
-st.caption("Inventory health, distribution center stock, and delivery reliability for the selected business window.")
+render_page_header("Inventory & Fulfillment", "Tracking supply chain efficiency, stock aging, and delivery SLAs.", icon="inventory")
 
 with st.sidebar:
     st.markdown("---")

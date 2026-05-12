@@ -5,11 +5,12 @@ import logging
 import inspect
 from enum import Enum
 from collections import OrderedDict
-from typing import List, Optional, Self
+from typing import List, Optional, Any
+
 
 from faker import Faker
 
-from src.utils import get_location, get_product_map
+from thelook_src.utils import get_location, get_product_map
 
 logging.basicConfig(
     level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
@@ -148,7 +149,7 @@ class User(ModelMixin):
         state: str = "*",
         postal_code: str = "*",
         fake: Faker,
-    ) -> Self:
+    ) -> "User":
         gender = fake.random_element(elements=("M", "F"))
         first_name = (
             fake.first_name_male() if gender == "M" else fake.first_name_female()
@@ -190,7 +191,7 @@ class User(ModelMixin):
         state: str = "*",
         postal_code: str = "*",
         fake: Faker,
-    ) -> Self:
+    ) -> "User":
         current_data = dataclasses.asdict(self)
         updated_fields = {
             "street_address": fake.street_address(),
@@ -247,7 +248,7 @@ class Order(ModelMixin):
     delivered_at: Optional[datetime.datetime]
 
     @classmethod
-    def new(cls, user: User, fake: Faker) -> Self:
+    def new(cls, user: User, fake: Faker) -> "User":
         return cls(
             order_id=random.randint(100000, 999999999),  # Generate random BIGINT ID
             user_id=user.id,
@@ -267,7 +268,7 @@ class Order(ModelMixin):
     def __str__(self):
         return f"Order(order_id={self.order_id}, user_id={self.user_id}, status='{self.status}', items={self.num_of_item})"
 
-    def update_status(self, fake: Faker, return_probability: float = 0.02) -> Self:
+    def update_status(self, fake: Faker, return_probability: float = 0.02) -> "User":
         status_changed = False
         status_timestamp = None
 
@@ -374,7 +375,7 @@ class OrderItem(ModelMixin):
     delivered_at: Optional[datetime.datetime]
 
     @classmethod
-    def new(cls, order: Order, fake: Faker) -> Self:
+    def new(cls, order: Order, fake: Faker) -> "User":
         product_id = fake.random_element(PRODUCT_MAP.keys())
         base_price = float(PRODUCT_MAP[product_id]["retail_price"])
         sale_price = round(base_price * random.uniform(0.85, 1.0), 2)
@@ -396,7 +397,7 @@ class OrderItem(ModelMixin):
     def __str__(self):
         return f"OrderItem(id={self.id}, order_id={self.order_id}, product_id={self.product_id}, status={self.status})"
 
-    def update_status(self, order: Order) -> Self:
+    def update_status(self, order: Order) -> "User":
         self.status = order.status
         self.updated_at = order.updated_at
         self.shipped_at = order.shipped_at
@@ -470,7 +471,7 @@ class Event(ModelMixin):
         order_item: Optional[OrderItem],
         event_category: str,
         fake: Faker,
-    ) -> List[Self]:
+    ) -> List[Any]:
         if event_category in ["purchase", "return", "cancel"]:
             assert order_item is not None
             user_id = user.id

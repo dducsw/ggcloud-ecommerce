@@ -35,7 +35,16 @@ class DataProvider:
                 query_parameters=query_params,
                 use_query_cache=True,
             )
-            return _self.client.query(query, job_config=job_config).to_dataframe(create_bqstorage_client=True)
+            df = _self.client.query(query, job_config=job_config).to_dataframe(create_bqstorage_client=True)
+            # Convert object/decimal columns to numeric where possible to fix Altair tooltip issues
+            for col in df.columns:
+                if df[col].dtype == "object":
+                    try:
+                        # Only convert if it looks like it should be numeric
+                        df[col] = pd.to_numeric(df[col], errors="ignore")
+                    except (ValueError, TypeError):
+                        pass
+            return df
         except Exception as e:
             st.error(f"SQL Error: {e}")
             return pd.DataFrame()
@@ -142,11 +151,75 @@ class DataProvider:
             COALESCE(SUM(cost), 0) as cost,
             COALESCE(SUM(margin), 0) as margin,
             COALESCE(SUM(orders), 0) as orders,
-            COALESCE(SAFE_DIVIDE(SUM(margin), SUM(revenue)), 0) as margin_rate
+            COALESCE(SAFE_DIVIDE(SUM(margin), SUM(revenue)), 0) as margin_rate,
+            COALESCE(SAFE_DIVIDE(SUM(revenue), SUM(orders)), 0) as aov
         FROM {self._t('agg_dashboard_daily')}
         WHERE date BETWEEN @start_date AND @end_date
         """
-        return self.run_query(q, self._date_params(ds, de))
+        df = self.run_query(q, self._date_params(ds, de))
+        if df.empty or df.iloc[0]['revenue'] == 0:
+            q_fallback = f"""
+            SELECT 
+                COALESCE(SUM(total_revenue), 0) as revenue,
+                COALESCE(SUM(cost), 0) as cost,
+                COALESCE(SUM(gross_margin), 0) as margin,
+                COUNT(*) as orders,
+                COALESCE(SAFE_DIVIDE(SUM(gross_margin), SUM(total_revenue)), 0) as margin_rate,
+                COALESCE(SAFE_DIVIDE(SUM(total_revenue), COUNT(*)), 0) as aov,
+                COALESCE(SAFE_DIVIDE(SUM(num_of_item), COUNT(*)), 0) as items_per_order
+            FROM {self._t("fact_orders")}
+            WHERE {self._timestamp_filter("created_at")}
+            """
+            df_fallback = self.run_query(q_fallback, self._date_params(ds, de))
+            if not df_fallback.empty and df_fallback.iloc[0]['revenue'] > 0:
+                return df_fallback
+        return df
+
+    def get_sales_comparison(self, ds, de):
+        # Calculate previous period of same duration
+        end_date = pd.to_datetime(de)
+        start_date = pd.to_datetime(ds)
+        duration = (end_date - start_date).days + 1
+        
+        prev_end = start_date - dt.timedelta(days=1)
+        prev_start = prev_end - dt.timedelta(days=duration - 1)
+        
+        q = f"""
+        WITH current_period AS (
+            SELECT 
+                SUM(revenue) as revenue,
+                SUM(orders) as orders,
+                SAFE_DIVIDE(SUM(revenue), SUM(orders)) as aov
+            FROM {self._t('agg_dashboard_daily')}
+            WHERE date BETWEEN @start_date AND @end_date
+        ),
+        prev_period AS (
+            SELECT 
+                SUM(revenue) as revenue,
+                SUM(orders) as orders,
+                SAFE_DIVIDE(SUM(revenue), SUM(orders)) as aov
+            FROM {self._t('agg_dashboard_daily')}
+            WHERE date BETWEEN @prev_start AND @prev_end
+        )
+        SELECT 
+            c.revenue, 
+            p.revenue as prev_revenue,
+            SAFE_DIVIDE(c.revenue - p.revenue, p.revenue) as revenue_growth,
+            c.orders,
+            p.orders as prev_orders,
+            SAFE_DIVIDE(c.orders - p.orders, p.orders) as orders_growth,
+            c.aov,
+            p.aov as prev_aov,
+            SAFE_DIVIDE(c.aov - p.aov, p.aov) as aov_growth
+        FROM current_period c, prev_period p
+        """
+        params = [
+            ("start_date", "DATE", str(start_date.date())),
+            ("end_date", "DATE", str(end_date.date())),
+            ("prev_start", "DATE", str(prev_start.date())),
+            ("prev_end", "DATE", str(prev_end.date())),
+        ]
+        return self.run_query(q, params)
 
     def get_revenue_trend(self, ds, de):
         q = f"""
@@ -283,7 +356,7 @@ class DataProvider:
         WHERE {self._timestamp_filter('oi.created_at')}
           {brand_filter}
         GROUP BY 1, 2, 3, 4
-        HAVING volume > 5
+        HAVING volume >= 1
         LIMIT 100
         """
         return self.run_query(q, params)
@@ -453,9 +526,9 @@ class DataProvider:
         q1 = f"""
         SELECT 
             COALESCE(AVG(delivery_duration_days), 0) as avg_delivery_days,
-            COALESCE(SAFE_DIVIDE(COUNTIF(is_delayed), COUNT(*)), 0) as delayed_rate
+            COALESCE(SAFE_DIVIDE(COUNTIF(delivery_duration_days > 3), COUNT(*)), 0) as delayed_rate
         FROM {self._t('fact_orders')}
-        WHERE {self._timestamp_filter('created_at')} AND delivery_duration_days IS NOT NULL AND delivery_duration_days > 0
+        WHERE {self._timestamp_filter('created_at')} AND delivery_duration_days IS NOT NULL
         """
         q2 = f"""
         SELECT COALESCE(SAFE_DIVIDE(COUNTIF(is_returned), COUNT(*)), 0) as return_rate
@@ -1101,6 +1174,37 @@ class DataProvider:
         """
         return self.run_query(query)
 
+    def get_realtime_funnel(self, window_minutes: int = 60):
+        # Get sessions that had activity in the last X minutes relative to latest data
+        q = f"""
+        WITH max_ts AS (
+            SELECT MAX(event_timestamp) as mts FROM {self.table_ref('v_events_raw_dedup')}
+        ),
+        recent_sessions AS (
+            SELECT session_id
+            FROM {self.table_ref('v_events_raw_dedup')}, max_ts
+            WHERE event_timestamp >= TIMESTAMP_SUB(mts, INTERVAL {window_minutes} MINUTE)
+            GROUP BY 1
+        ),
+        session_stages AS (
+            SELECT 
+                s.session_id,
+                MAX(IF(e.event_type = 'home', 1, 0)) as has_home,
+                MAX(IF(e.event_type = 'product', 1, 0)) as has_product,
+                MAX(IF(e.event_type = 'cart', 1, 0)) as has_cart,
+                MAX(IF(e.event_type = 'purchase', 1, 0)) as has_purchase
+            FROM recent_sessions s
+            JOIN {self.table_ref('v_events_raw_dedup')} e ON s.session_id = e.session_id
+            GROUP BY 1
+        )
+        SELECT 'Home' as stage, COUNTIF(has_home=1) as sessions, 1 as ord FROM session_stages UNION ALL
+        SELECT 'Product' as stage, COUNTIF(has_product=1) as sessions, 2 as ord FROM session_stages UNION ALL
+        SELECT 'Cart' as stage, COUNTIF(has_cart=1) as sessions, 3 as ord FROM session_stages UNION ALL
+        SELECT 'Purchase' as stage, COUNTIF(has_purchase=1) as sessions, 4 as ord FROM session_stages
+        ORDER BY ord
+        """
+        return self.run_query(q)
+
     def get_conversion_funnel(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
         traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
         query = f"""
@@ -1140,6 +1244,22 @@ class DataProvider:
         SELECT 'Product -> Cart' AS transition, product_sessions AS from_sessions, cart_sessions AS to_sessions FROM base
         UNION ALL
         SELECT 'Cart -> Purchase' AS transition, cart_sessions AS from_sessions, purchased_sessions AS to_sessions FROM base
+        """
+        return self.run_query(query)
+
+    def get_top_bounce_pages(self, start_date: str, end_date: str, traffic_sources: list[str] | None = None) -> pd.DataFrame:
+        traffic_filter = self._traffic_source_filter(traffic_sources, "traffic_source")
+        query = f"""
+        SELECT 
+            uri,
+            COUNT(*) as bounces
+        FROM {self.table_ref('v_session_metrics_latest')}
+        WHERE session_date BETWEEN DATE('{start_date}') AND DATE('{end_date}')
+          AND event_count <= 2
+          {traffic_filter}
+        GROUP BY 1
+        ORDER BY 2 DESC
+        LIMIT 10
         """
         return self.run_query(query)
 
